@@ -40,7 +40,7 @@ Run the `reviewer` subagent with the issue number and the worktree path. Keep it
 - `VERDICT: FAIL`: show the Blockers with their scenarios and stop. When the user asks you to fix them, use the fix loop above.
 - `VERDICT: PASS`: show Should fix and Nit items and ask, for each group: fix now (fix loop above; the new commits are reviewed again) or leave them. Offer `/new-issue` for anything left that is worth doing later.
 - Anything else (the agent errors or times out, or the report's last line is not exactly `VERDICT: PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
-- If the `reviewer` agent is not available in this session (agents load when a session starts), run a general subagent told to follow `.claude/agents/reviewer.md` exactly.
+- If the `reviewer` agent is not available in this session (agents load when a session starts), run a general subagent told to follow `.claude/agents/reviewer.md` exactly and, in so many words: read-only, never edit, create or delete files, commit, push or write to GitHub. That subagent has every tool, so the read-only rule rests on the prompt; check `git status --porcelain` is unchanged after it returns.
 
 ## 4. Draft the PR, wait for yes
 
@@ -79,7 +79,7 @@ The guard hook asks before each of these; that is the code-level lock on top of 
 
 ```bash
 git push -u origin <branch>
-gh pr create --base main --title "<title>" --label <label1> --label <label2> --milestone <milestone> --body-file - <<'EOF'
+gh pr create --base main --title "<title>" --label "<label1>" --label "<label2>" --milestone "<milestone>" --body-file - <<'EOF'
 <body>
 EOF
 ```
