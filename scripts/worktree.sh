@@ -2,8 +2,8 @@
 # One worktree per GitHub issue, each with its own database.
 #
 #   scripts/worktree.sh new <issue> <slug> [type]   branch <type>/<issue>-<slug> from origin/main (type: feat|fix|chore|docs)
-#                                                   in ../company-assistant-wt/<issue>, then `setup`
-#   scripts/worktree.sh setup                       inside a worktree: .env files, database assistant_<issue>, install, migrate
+#                                                   in ../<repo folder>-wt/<issue>, then `setup`
+#   scripts/worktree.sh setup                       inside a worktree: .env files, database assistant_<issue>, git hooks, install, migrate
 #   scripts/worktree.sh remove <issue> [--yes] [--force]
 #                                                   drop the database, remove the worktree, delete the branch if merged
 #   scripts/worktree.sh list
@@ -86,6 +86,10 @@ cmd_setup() {
     psql_admin "CREATE DATABASE \"$db\" OWNER $DB_USER" >/dev/null
     echo "    created"
   fi
+
+  step "git hooks (.githooks: pre-push needs the reviewer's PASS)"
+  # repo-wide setting, read relative to each checkout, so every worktree runs its own .githooks
+  git config core.hooksPath .githooks
 
   step "pnpm install --frozen-lockfile"
   (cd "$top" && pnpm install --frozen-lockfile)
