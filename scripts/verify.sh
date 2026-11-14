@@ -7,7 +7,8 @@
 # Same commands as .github/workflows/ci.yml, through turbo, so local and CI agree:
 #   web:    typecheck, lint, build
 #   server: migrate this checkout's database, then typecheck, lint, test
-#   hooks:  .claude/hooks/test_guard.py (always; a few seconds, no turbo package)
+#   hooks:  scripts/test-tooling.sh: guard, Stop hook, review-status, ship workflow, settings
+#           (always; seconds, no turbo package)
 # Exit 0 = green. Used by the Stop hook (.claude/hooks/verify_on_stop.py).
 set -euo pipefail
 
@@ -43,9 +44,9 @@ fi
 
 echo "verify ($why): web=$web server=$server"
 failed=()
-echo "==> hooks: guard tests"
-if ! out="$(python3 -B .claude/hooks/test_guard.py 2>&1)"; then
-  echo "$out" | tail -40
+echo "==> hooks: tooling tests"
+if ! out="$(scripts/test-tooling.sh 2>&1)"; then
+  echo "$out" | tail -60
   failed+=(hooks)
 fi
 if [ "$server" = true ]; then
