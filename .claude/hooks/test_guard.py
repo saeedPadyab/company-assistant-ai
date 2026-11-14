@@ -146,6 +146,22 @@ class ReviewGate(GuardTest):
             "git config --get-regexp alias", "cat .git/config",
         ]])
 
+    def test_verdict_refs_and_settings_stay_out_of_shell_writes(self) -> None:
+        # issue #5: copying a note ref over the verdict ref forges a PASS; disableAllHooks turns the guard off
+        self.check([(c, "deny") for c in [
+            "cp .git/refs/notes/mine .git/refs/notes/ai-review", "mv /tmp/x .git/refs/notes/ai-review",
+            "tee .git/refs/notes/ai-review", "echo x > .git/refs/notes/ai-review",
+            "cp /tmp/x /repo/.git/refs/notes/ai-review",
+            "cp /tmp/packed .git/packed-refs", "mv /tmp/packed .git/packed-refs",
+            "tee -a .git/packed-refs", "echo x >> .git/packed-refs",
+            "echo '{\"disableAllHooks\": true}' > .claude/settings.local.json",
+            "tee .claude/settings.json", "sed -i '' s/x/y/ .claude/settings.local.json",
+            "cp /tmp/s.json .claude/settings.local.json", "rm .claude/settings.json",
+        ]])
+        self.check([(c, "allow") for c in [
+            "cat .git/refs/notes/ai-review", "cat .git/packed-refs", "cat .claude/settings.json",
+        ]])
+
     def test_existing_aliases(self) -> None:
         self.git("config", "alias.p", "push --no-verify")
         self.git("config", "alias.n", "notes --ref=ai-review add -f -m x")
