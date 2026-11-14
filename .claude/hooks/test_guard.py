@@ -159,6 +159,9 @@ class ReviewGate(GuardTest):
             "cp /tmp/s.json .claude/settings.local.json", "rm .claude/settings.json",
             "git checkout -- .claude/settings.json", "git rm .claude/settings.local.json",
             "git restore --source=HEAD~1 .claude/settings.json",
+            "rsync /tmp/x .git/refs/notes/ai-review", "rsync /tmp/s.json .claude/settings.local.json",
+            # over-blocking on purpose: a copy out of these paths is denied as well
+            "cp .git/refs/notes/ai-review /tmp/backup",
         ]])
         self.check([(c, "allow") for c in [
             "cat .git/refs/notes/ai-review", "cat .git/packed-refs", "cat .claude/settings.json",

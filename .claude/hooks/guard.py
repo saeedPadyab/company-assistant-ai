@@ -31,7 +31,9 @@ git writes to .githooks/, .git/config, .git/refs/ and .git/packed-refs, which ho
 note, and to .claude/settings*.json, where `disableAllHooks` turns this guard off; the Edit and
 Write tools on those settings files are denied in .claude/settings.json), checks before any push
 that git will run it, and gives an early, readable deny for a push without the reviewer's PASS
-note. Only the `reviewer` subagent (hook input `agent_type`) may write the note.
+note. These paths are matched as text anywhere in a writer's arguments, so a copy out of them
+(`cp .git/refs/notes/ai-review /tmp/x`) is denied too, on purpose; reading them (`cat`) is not.
+Only the `reviewer` subagent (hook input `agent_type`) may write the note.
 `review-status.sh publish` writes to GitHub, so it asks.
 
 Threat model (issue #3): in scope is Claude pushing or recording a verdict by mistake or as a
@@ -42,7 +44,10 @@ built from pieces (`R=ai; $R-review`, `--no-$V`, quotes inside a word: `ai-'revi
 command name held in a variable (`S=scripts/review-status.sh; $S record`); an editor-tool edit of
 .githooks/pre-push, .git/config, .git/refs/ or .git/packed-refs (a hook edit shows in the PR
 diff); an edit of .claude/settings*.json by a tool other than Edit and Write, or by a script; a
-path built at run time (`$(git rev-parse --git-common-dir)/refs`). The main session writes the
+path built at run time (`$(git rev-parse --git-common-dir)/refs`); a path relative to a folder
+entered first (`cd .git/refs/notes && cp mine ai-review`, `git -C .claude checkout settings.json`)
+or a copy into a parent folder (`cp -r /tmp/refs .git/`), since the guard does not track the
+working folder or what a folder copy lands on. The main session writes the
 reviewer's prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is
 built from the same local note, so it makes the verdict visible and required on the PR; it is not
 an independent check.
@@ -99,7 +104,7 @@ GIT_BUILTINS = {
     "update-ref", "worktree", "symbolic-ref", "cat-file", "for-each-ref", "help", "version",
 }
 ALIAS_RISK = re.compile(r"push|notes|update-ref|ai-review|hookspath|!", re.IGNORECASE)
-HOOK_WRITERS = {"rm", "mv", "cp", "chmod", "ln", "tee", "truncate", "unlink", "install", "perl", "dd"}
+HOOK_WRITERS = {"rm", "mv", "cp", "chmod", "ln", "tee", "truncate", "unlink", "install", "perl", "dd", "rsync"}
 # Commands that run another command given as arguments: the guard cannot parse what they run
 EXEC_HEADS = {"xargs", "find", "bash", "sh", "zsh", "dash", "eval", "parallel", "watch", "script", "su", "fd"}
 # Prefixes dropped before the real command; value: options of theirs that take a value
@@ -416,7 +421,8 @@ def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
                               "the user edits .claude/settings*.json."))
     git_sub, _ = git_subcommand(tokens)
     if git_sub in {"rm", "mv", "restore", "checkout", "update-index"} and any(hook_path(t) for t in tokens):
-        found.append(("deny", ".githooks/, .git/ and .claude/settings*.json decide whether the review check runs. "
+        found.append(("deny", ".githooks/, .git/config, .git/hooks, .git/refs and .claude/settings*.json decide "
+                              "whether the review check runs. "
                               "Change .githooks/ in an issue and PR; the user edits .claude/settings*.json."))
     if git_sub == "config" and ({"--remove-section", "--rename-section"} & set(tokens)) and any(
             t.lower() == "core" or t.lower().startswith("core.") for t in tokens):
