@@ -28,6 +28,7 @@ Run from the repo root.
 - `apps/web` and `apps/server` do not import each other's internals (the web app may import server route types for the Hono client).
 - CI picks jobs with `turbo ls --affected`. When `apps/web` starts importing server route types, add `"server": "workspace:*"` to `apps/web/package.json` so server changes also run the web job.
 - Never edit an existing migration; schema changes get a new one.
+- A new guard rule, hook or tooling script (`.claude/hooks/`, `.claude/workflows/`, `.githooks/`, `scripts/`, the `.claude/settings.json` rules) gets its test in the same change; `scripts/test-tooling.sh` runs them all (in `scripts/verify.sh` and the CI `hooks` job).
 
 ## Workflow
 - Work is tracked as GitHub issues; `<KEY>` is the issue number. One small change per issue, branch and PR, targeting `main` on GitHub.
