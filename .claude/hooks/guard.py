@@ -12,7 +12,8 @@ that pushes on its own is out of reach (that is the sandbox's job).
 
 Subshells and groups (`(cd x && git push)`, `{ ...; }`), shell keywords (`if`, `then`, `do`),
 wrappers (`timeout 60`, `nice`, `nohup`, `sudo -u x`, `env X=1`) and package runners (`pnpm exec`,
-`pnpm dlx`, `npx`) are split off or stripped first. Git aliases are denied where they are set
+`pnpm dlx`, `npx`) are split off or stripped first, and in any command that is not git itself
+(`pnpm git push`, `sudo -u me git ...`) every later `git` word is checked as a git command too. Git aliases are denied where they are set
 (`git -c alias.x=...`, `git config alias.x`), and an existing alias that may push, write notes or
 change hooks is denied where it is used.
 
@@ -25,8 +26,8 @@ to the verdict ref inside them is denied. If this script crashes, the command is
 Review gate: the lock on pushes is git's own pre-push hook (.githooks/pre-push), which git runs
 however the push was started. This guard adds an early, readable deny for a plain `git push` without
 the reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh), and denies what would
-switch the hook off: `--no-verify`, any change to core.hooksPath, and shell writes to .githooks/ or
-.git/config. Only the
+switch the hook off: `--no-verify`, any change to core.hooksPath or removal of [core], and shell or
+git writes to .githooks/ or .git/config; before any push it checks that git will run the hook. Only the
 `reviewer` subagent (hook input `agent_type`) may write that ref: outside it, a git command that
 names the ref (refs/notes/ai-review, --ref ai-review, notes.* or core.notesRef config) is denied except reads, and
 so is any VAR=...ai-review assignment. `review-status.sh publish` writes to GitHub, so it asks.
@@ -230,6 +231,26 @@ def notes_action(args: list[str]) -> str:
     return "list"
 
 
+def pre_push_off(cwd: str | None) -> str | None:
+    """Why git would not run .githooks/pre-push here, or None when it would."""
+    def git(*a: str) -> str | None:
+        try:
+            r = subprocess.run(["git", *a], cwd=cwd or None, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return r.stdout.strip() if r.returncode == 0 else None
+    top = git("rev-parse", "--show-toplevel")
+    if top is None:
+        return None  # not a repository: git push fails on its own
+    hooks = git("config", "--get", "core.hooksPath")
+    if not hooks:
+        return "core.hooksPath is not set"
+    hook = os.path.join(top, os.path.expanduser(hooks), "pre-push")
+    if not (os.path.isfile(hook) and os.access(hook, os.X_OK)):
+        return f"{hook} is missing or not executable"
+    return None
+
+
 def alias_of(name: str, cwd: str | None) -> str | None:
     """The expansion of git alias `name` in `cwd`, or None."""
     try:
@@ -273,6 +294,8 @@ def check_review_record(tokens: list[str], agent_type: str | None) -> tuple[str,
 def check_push(args: list[str], branch: str | None, cwd: str | None = None,
                verdict_of=review_verdict) -> tuple[str, str]:
     """('deny'|'ask', reason) for `git push <args>`."""
+    if (off := pre_push_off(cwd)):
+        return "deny", f"The pre-push review check is off ({off}). Run scripts/worktree.sh setup, then push."
     positional = []
     i = 0
     while i < len(args):
@@ -375,6 +398,12 @@ def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
             t in {">", ">>", ">|"} and hook_path(nxt) for t, nxt in zip(tokens, tokens[1:])):
         found.append(("deny", ".githooks/ and .git/config decide whether the pre-push review check runs. "
                               "Change .githooks/ in an issue and PR; leave .git/config to git commands."))
+    git_sub, _ = git_subcommand(tokens)
+    if git_sub in {"rm", "mv", "restore", "checkout", "update-index"} and any(hook_path(t) for t in tokens):
+        found.append(("deny", ".githooks/ holds the pre-push review check. Change it in an issue and PR, not from the shell."))
+    if git_sub == "config" and ({"--remove-section", "--rename-section"} & set(tokens)) and any(
+            t.lower() == "core" or t.lower().startswith("core.") for t in tokens):
+        found.append(("deny", "Removing the [core] section turns the pre-push review check off."))
     if head == "git" and any(t.lower().startswith("alias.") for t in tokens) and not (
             {"--get", "--get-all", "--get-regexp", "-l", "--list"} & set(tokens)):
         found.append(("deny", "No git aliases: the guard cannot see what an alias runs. Write the full git command."))
@@ -467,6 +496,12 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
         if os.path.basename(tokens[0]) == "git" and (d := git_dir_option(tokens)):
             where = os.path.join(cwd or os.getcwd(), os.path.expanduser(d))
         results.extend(check_segment(tokens, branch_in(where), where, agent_type, verdict_of))
+        # `pnpm git push`, `sudo -u me git ...`, `make GIT=git ...`: a runner the guard does not know may
+        # run the git that follows it, so check from every later `git` word as well
+        if os.path.basename(tokens[0]) != "git":
+            for j in range(1, len(tokens)):
+                if os.path.basename(tokens[j]) == "git":
+                    results.extend(check_segment(tokens[j:], branch_in(where), where, agent_type, verdict_of))
     for kind in ("deny", "ask"):
         reasons = [r for k, r in results if k == kind]
         if reasons:

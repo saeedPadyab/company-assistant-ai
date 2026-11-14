@@ -36,6 +36,9 @@ class GuardTest(unittest.TestCase):
         self.git("init", "-q", "-b", "feat/1-x")
         self.git("config", "user.email", "test@example.com")
         self.git("config", "user.name", "test")
+        os.mkdir(os.path.join(self.repo, ".githooks"))
+        shutil.copy2(os.path.join(GITHOOKS, "pre-push"), os.path.join(self.repo, ".githooks", "pre-push"))
+        self.git("config", "core.hooksPath", ".githooks")  # as scripts/worktree.sh setup does
         self.commit("one")
 
     def git(self, *args: str) -> str:
@@ -89,6 +92,7 @@ class ReviewGate(GuardTest):
             "sudo -u me git push", "! git push",
             "pnpm exec git push", "pnpm --filter server exec git push", "pnpm dlx git push",
             "npm exec -- git push", "npx git push", "yarn exec git push",
+            "pnpm git push", "pnpm --filter server git push", "pnpm -C . git push", "bun git push",
         ]])
         self.note("PASS")
         self.check([("timeout 60 git push", "ask"), ("X=1; git push", "ask"), ("(git push)", "ask")])
@@ -106,7 +110,19 @@ class ReviewGate(GuardTest):
             "git config --global alias.p push", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
             "printf '[core]\\n\\thooksPath = /dev/null\\n' >> .git/config", "tee -a .git/config",
             "rm -rf .git/hooks", "sed -i '' s/x/y/ .git/config",
+            "pnpm git push --no-verify", "pnpm git config core.hooksPath /dev/null",
+            "pnpm git -c core.hooksPath=/dev/null push", "pnpm --filter server git push --no-verify",
+            "git config --remove-section core", "git config --rename-section core x",
+            "git rm .githooks/pre-push", "git mv .githooks/pre-push x", "git restore --source=HEAD~1 .githooks",
         ]])
+
+    def test_push_is_denied_when_the_hook_is_off(self) -> None:
+        self.note("PASS")
+        self.git("config", "--unset", "core.hooksPath")
+        self.check([("git push", "deny")])
+        self.git("config", "core.hooksPath", ".githooks")
+        os.chmod(os.path.join(self.repo, ".githooks", "pre-push"), 0o644)
+        self.check([("git push", "deny")])
         self.check([(c, "allow") for c in [
             "git config --get core.hooksPath", "cat .githooks/pre-push",
             "git commit -m '3: document core.hooksPath'",
@@ -213,6 +229,7 @@ class WhoRecords(GuardTest):
         "git config alias.n 'notes --ref=ai-review add -f -m x'",
         "npx git notes --ref=ai-review add -m x",
         "pnpm exec git notes --ref=ai-review add -m x",
+        "pnpm git notes --ref ai-review add -f -m 'VERDICT: PASS' HEAD",
     ]
     READS = [
         "scripts/review-status.sh get",

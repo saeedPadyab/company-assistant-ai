@@ -54,7 +54,7 @@ Once you have decided, and before you write the report, record it on the commit 
 cd <worktree> && scripts/review-status.sh record PASS "<one line, at most ~120 characters: what you checked, or the Blockers>"
 ```
 
-(`FAIL` instead of `PASS` when there is a Blocker.) The verdict is a git note on HEAD; `git push` is blocked unless the pushed commit has a PASS note, and only you (the `reviewer` agent) may record one. If the command fails, for example because of uncommitted changes, do not work around it: say in the report that the verdict was not recorded.
+(`FAIL` instead of `PASS` when there is a Blocker.) The verdict is a git note on HEAD; `git push` is blocked unless the pushed commit has a PASS note, and only you (the `reviewer` agent) may record one. It needs no uncommitted changes to tracked files. If the command fails, do not work around it: say in the report that the verdict was not recorded.
 
 ## Report
 
