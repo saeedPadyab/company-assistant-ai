@@ -10,12 +10,19 @@ Rules work on the parsed command, so word order and flags (`pnpm --filter server
 `git push origin HEAD:main`) do not get around them. It only sees the command text: a script
 that pushes on its own is out of reach (that is the sandbox's job).
 
+Wrappers (`timeout 60`, `nice`, `nohup`, `env X=1`) are stripped first. Commands that run other
+commands (`xargs`, `find -exec`, `bash -c`, `eval`) cannot be parsed, so a `git push` or a write
+to the verdict ref inside them is denied. If this script crashes, the command is denied.
+
 Review gate: `git push` is denied unless the tip of each pushed ref (HEAD when no refspec) has the
-reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh). Only the `reviewer` subagent
-(hook input `agent_type`) may touch that ref: outside it, any git command naming `ai-review` is
-denied except reads (log, show, notes show/list), and so is GIT_NOTES_REF / GIT_CONFIG_* pointing
-at it. Known limits (text only, as above): a script or `bash -c '...'` that writes the note, or a
-file edit under .git/, is not seen. The GitHub `ai-review` status is the second lock.
+reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh); `--tags` is denied. Only the
+`reviewer` subagent (hook input `agent_type`) may write that ref: outside it, a git command that
+names the ref (refs/notes/ai-review, --ref ai-review, a notes.* config) is denied except reads, and
+so is any VAR=...ai-review assignment. `review-status.sh publish` writes to GitHub, so it asks.
+Known limits: the hook sees only the command text, so a script that writes the note, a variable
+built in pieces, or a file edit under .git/ is not seen. The main session writes the reviewer's
+prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same
+local note, so it is not an independent check; it makes the verdict visible and required on the PR.
 
 Tests: python3 .claude/hooks/test_guard.py (run by scripts/verify.sh).
 """
@@ -50,11 +57,18 @@ GH_API_FIELD_OPTS = {"-f", "-F", "--field", "--raw-field", "--input"}
 # Review gate: the reviewer's verdict is a git note on the commit (scripts/review-status.sh)
 REVIEW_NOTES_REF = "ai-review"
 REVIEWER_AGENT = "reviewer"
-NOTES_ACTIONS = {"add", "append", "edit", "copy", "remove", "merge", "prune", "show", "list", "get-ref"}
 NOTES_READ_ACTIONS = {"show", "list", "get-ref"}
 GIT_READ_SUBS = {"log", "show", "rev-parse", "status", "diff"}
 RECORD_DENIED = ("Only the reviewer subagent records a review verdict. Run the `reviewer` agent on this branch; "
                  "it reviews HEAD and records PASS or FAIL itself.")
+# Commands that run another command given as arguments: the guard cannot parse what they run
+EXEC_HEADS = {"xargs", "find", "bash", "sh", "zsh", "dash", "eval", "parallel", "watch", "script", "su", "fd"}
+# Prefixes dropped before the real command; value: options of theirs that take a value
+WRAPPERS = {
+    "sudo": set(), "env": set(), "command": set(), "exec": set(), "time": set(), "nohup": set(),
+    "timeout": {"-k", "--kill-after", "-s", "--signal"}, "nice": {"-n", "--adjustment"},
+    "stdbuf": {"-i", "-o", "-e"}, "ionice": {"-c", "-n", "-p"},
+}
 
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n"}
@@ -79,13 +93,25 @@ def segments_of(command: str) -> list[list[str]]:
         elif tok:
             current.append(tok)
     segments.append(current)
-    return [strip_prefix(s) for s in segments if s]
+    # a segment of only `X=1` strips to nothing: drop it after stripping, not before
+    return [t for t in (strip_prefix(s) for s in segments) if t]
 
 
 def strip_prefix(tokens: list[str]) -> list[str]:
-    """Drop leading VAR=value assignments and wrappers like `sudo`, `env`, `command`."""
-    while tokens and (re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]) or tokens[0] in {"sudo", "env", "command", "exec", "time"}):
-        tokens = tokens[1:]
+    """Drop leading VAR=value assignments and wrappers (`sudo`, `env`, `timeout 60`, `nice -n 5`, ...)."""
+    while tokens:
+        head = os.path.basename(tokens[0])
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[0]):
+            tokens = tokens[1:]
+            continue
+        if head not in WRAPPERS:
+            break
+        value_opts, i = WRAPPERS[head], 1
+        while i < len(tokens) and tokens[i].startswith("-"):
+            i += 2 if tokens[i] in value_opts else 1
+        if head == "timeout" and i < len(tokens):
+            i += 1  # the duration
+        tokens = tokens[i:]
     return tokens
 
 
@@ -135,20 +161,58 @@ def review_verdict(rev: str, cwd: str | None) -> str:
     return {"VERDICT: PASS": "PASS", "VERDICT: FAIL": "FAIL"}.get(first, "NONE")
 
 
+def names_review_ref(tokens: list[str]) -> bool:
+    """True when a token names the verdict ref: refs/notes/ai-review, --ref[=] ai-review, --notes=ai-review,
+    or a notes.* config key/value with it. Plain text such as a commit message or branch name does not count."""
+    for i, tok in enumerate(tokens):
+        if REVIEW_NOTES_REF not in tok:
+            continue
+        prev = tokens[i - 1] if i else ""
+        if ("notes/" + REVIEW_NOTES_REF in tok or tok.startswith(("--ref=", "--notes=", "notes."))
+                or prev in {"--ref", "--notes"} or (prev.startswith("notes.") and "=" not in prev)):
+            return True
+    return False
+
+
+def notes_action(args: list[str]) -> str:
+    """The `git notes` subcommand (default: list), skipping options and the --ref value."""
+    i = 0
+    while i < len(args):
+        if args[i] == "--ref":
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            return args[i]
+    return "list"
+
+
 def check_review_record(tokens: list[str], agent_type: str | None) -> tuple[str, str] | None:
-    """Only the reviewer subagent writes verdicts (refs/notes/ai-review)."""
+    """Only the reviewer subagent writes verdicts (refs/notes/ai-review); publishing one asks."""
+    for i, tok in enumerate(tokens[:-1]):
+        if os.path.basename(tok) == "review-status.sh" and tokens[i + 1] == "publish":
+            return "ask", "review-status.sh publish posts the `ai-review` commit status to GitHub. Confirm the commit."
     if agent_type == REVIEWER_AGENT:
         return None
-    for i, tok in enumerate(tokens[:-1]):
-        if os.path.basename(tok) == "review-status.sh" and tokens[i + 1] == "record":
+    head = os.path.basename(tokens[0])
+    # `bash -c '... record ...'`, `xargs scripts/review-status.sh record`: match inside tokens too
+    if any(re.search(r"review-status\.sh['\"]?\s+['\"]?record\b", t) for t in tokens) or any(
+            os.path.basename(t) == "review-status.sh" and nxt == "record" for t, nxt in zip(tokens, tokens[1:])):
+        return "deny", RECORD_DENIED
+    if head in EXEC_HEADS:
+        # the command it runs is a string or arguments we do not parse: any mention of the ref with notes is enough
+        if any(REVIEW_NOTES_REF in t for t in tokens) and any(re.search(r"notes|update-ref|config", t) for t in tokens):
             return "deny", RECORD_DENIED
+        return None
     sub, args = git_subcommand(tokens)
-    if sub is None or not any(REVIEW_NOTES_REF in t for t in tokens[1:]):
+    if sub == "notes" and notes_action(args) not in NOTES_READ_ACTIONS and any(
+            ("$" in t or "`" in t) and (t.startswith("--ref=") or p == "--ref") for p, t in zip([""] + args, args)):
+        return "deny", "A `git notes` write with a variable --ref cannot be checked. Name the ref literally."
+    if sub is None or not names_review_ref(tokens):
         return None
-    # git names the ref: allow reads, deny everything else (notes add, update-ref, config notes.rewriteRef, -c ...)
-    if sub in GIT_READ_SUBS and not any(t == "-c" for t in tokens):
-        return None
-    if sub == "notes" and next((a for a in args if a in NOTES_ACTIONS), "list") in NOTES_READ_ACTIONS:
+    if names_review_ref(tokens[:len(tokens) - len(args) - 1]):  # `git -c notes.rewriteRef=... <sub>`
+        return "deny", RECORD_DENIED
+    if sub in GIT_READ_SUBS or (sub == "notes" and notes_action(args) in NOTES_READ_ACTIONS):
         return None
     return "deny", RECORD_DENIED
 
@@ -167,6 +231,8 @@ def check_push(args: list[str], branch: str | None, cwd: str | None = None,
             return "deny", "No force push. Push a new commit instead."
         if arg in {"--all", "--mirror"}:
             return "deny", f"`git push {arg}` would push {'/'.join(sorted(PROTECTED))}. Push one feature branch."
+        if arg in {"--tags", "--follow-tags"}:
+            return "deny", f"`git push {arg}` pushes tagged commits the review gate does not check. Push the branch."
         if arg.startswith("-"):
             i += 1
             continue
@@ -243,6 +309,8 @@ def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
 
     if record := check_review_record(tokens, agent_type):
         found.append(record)
+    if head in EXEC_HEADS and re.search(r"(^|\s)(\S*/)?git\s(.*\s)?push\b", " ".join(tokens)):
+        found.append(("deny", f"Run `git push` directly, not through `{head}`, so the guard can check the branch and the review."))
 
     # .env contents through the shell (Read(...) deny rules only cover the Read tool)
     if head in READERS and any(is_env_file(t) for t in tokens[1:]):
@@ -308,8 +376,10 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
             cache[path] = branch_of(path)
         return cache[path]
 
-    # env assignments are stripped from segments, so check them on the raw text
-    if agent_type != REVIEWER_AGENT and REVIEW_NOTES_REF in command and re.search(r"\bGIT_(NOTES_REF|CONFIG_)", command):
+    # env assignments are stripped from segments, so check them on the raw text:
+    # GIT_NOTES_REF=refs/notes/ai-review, GIT_CONFIG_VALUE_0=..., or R=ai-review used later as $R
+    if agent_type != REVIEWER_AGENT and re.search(
+            r"(^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*=['\"]?[^\s;&|]*" + re.escape(REVIEW_NOTES_REF), command):
         results.append(("deny", RECORD_DENIED))
     for tokens in segments_of(command):
         if tokens[0] == "cd" and len(tokens) > 1:
@@ -336,7 +406,11 @@ def main() -> int:
     if not command:
         return 0
     # agent_type is set by Claude Code: the subagent's name inside a subagent, absent in the main session
-    decision = decide(command, payload.get("cwd"), agent_type=payload.get("agent_type"))
+    try:
+        decision = decide(command, payload.get("cwd"), agent_type=payload.get("agent_type"))
+    except Exception as e:  # a crash must not let the command through (exit 1 does not block)
+        decision = ("deny", f"guard.py failed on this command ({type(e).__name__}: {e}). "
+                            "Rewrite it as plain commands, or ask the user to run it.")
     if not decision:
         return 0
     kind, reason = decision

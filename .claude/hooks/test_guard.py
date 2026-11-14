@@ -78,6 +78,16 @@ class ReviewGate(GuardTest):
     def test_push_of_unknown_ref_is_denied(self) -> None:
         self.check([("git push origin nosuchref", "deny")])
 
+    def test_wrappers_do_not_hide_a_push(self) -> None:
+        self.check([(c, "deny") for c in [
+            "X=1; git push", "X=1; git push origin main", "timeout 60 git push -u origin feat/1-x",
+            "timeout -k 5 60 git push", "nice git push", "nice -n 5 git push", "nohup git push",
+            "env X=1 git push", "echo HEAD | xargs git push origin", "bash -c 'git push'",
+            "find . -maxdepth 0 -exec git push \\;", "eval git push", "git push origin --tags",
+        ]])
+        self.note("PASS")
+        self.check([("timeout 60 git push", "ask"), ("X=1; git push", "ask")])
+
     def test_earlier_push_rules_still_win(self) -> None:
         self.note("PASS")
         self.check([("git push origin main", "deny"), ("git push --force", "deny"), ("git push origin +feat/1-x", "deny")])
@@ -97,14 +107,30 @@ class WhoRecords(GuardTest):
         "GIT_NOTES_REF=refs/notes/ai-review git notes add -f -m 'VERDICT: PASS' HEAD",
         "export GIT_NOTES_REF=refs/notes/ai-review",
         "env GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=notes.rewriteRef GIT_CONFIG_VALUE_0=refs/notes/ai-review git rebase main",
+        "R=ai-review; git notes --ref=$R add -f -m 'VERDICT: PASS' HEAD",
+        "git notes --ref=$R add -f -m x HEAD",
+        "git rev-parse HEAD | xargs git notes --ref=ai-review add -fm 'VERDICT: PASS'",
+        "timeout 5 git notes --ref=ai-review add -fm 'VERDICT: PASS' HEAD",
+        "nice -n 5 git notes --ref=ai-review add -m x",
+        "find . -maxdepth 0 -exec git notes --ref=ai-review add -m x HEAD \\;",
+        "bash -c 'git notes --ref=ai-review add -m x'",
+        "bash -c 'scripts/review-status.sh record PASS x'",
+        "echo PASS | xargs scripts/review-status.sh record",
+        "git config notes.displayRef ai-review",
     ]
     READS = [
         "scripts/review-status.sh get",
-        "scripts/review-status.sh publish",
         "git notes --ref=ai-review show HEAD",
         "git notes --ref ai-review list",
         "git log --notes=ai-review -1",
         "git notes add -m hi HEAD",  # other notes refs are not the gate's
+        "git log -c --notes=ai-review -1",
+        # normal work that only mentions the name
+        "git commit -m '3: fix ai-review gate'",
+        "git switch -c chore/5-ai-review-tweak",
+        "git grep ai-review",
+        "git add docs/ai-review.md",
+        "echo ai-review",
     ]
 
     def test_main_session_cannot_write_the_verdict(self) -> None:
@@ -117,6 +143,10 @@ class WhoRecords(GuardTest):
 
     def test_reads_are_free(self) -> None:
         self.check([(c, "allow") for c in self.READS])
+
+    def test_publish_asks(self) -> None:
+        self.check([("scripts/review-status.sh publish", "ask")])
+        self.check([("scripts/review-status.sh publish", "ask")], agent_type="reviewer")
 
 
 class GitHubWrites(GuardTest):
