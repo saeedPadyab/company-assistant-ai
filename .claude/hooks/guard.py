@@ -33,6 +33,11 @@ DEP_CHANGE = {"add", "remove", "rm", "uninstall", "un", "update", "up", "upgrade
 PM_VALUE_OPTS = {"--filter", "-F", "-C", "--dir", "--prefix", "--workspace", "--cwd"}
 GIT_VALUE_OPTS = {"-C", "-c", "--git-dir", "--work-tree", "--namespace"}
 PUSH_VALUE_OPTS = {"--repo", "-o", "--push-option", "--receive-pack", "--exec"}
+# gh: anything that is not a read writes to GitHub and needs the user's yes
+GH_VALUE_OPTS = {"-R", "--repo", "--hostname"}
+GH_READ_ACTIONS = {"list", "view", "status", "diff", "checks", "watch", "download", "checkout"}
+GH_FREE_GROUPS = {"search", "browse", "help", "version", "completion"}
+GH_API_FIELD_OPTS = {"-f", "-F", "--field", "--raw-field", "--input"}
 
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n"}
@@ -129,6 +134,44 @@ def check_push(args: list[str], branch: str | None) -> tuple[str, str]:
     return "ask", "git push sends code off this machine. Confirm the branch and remote."
 
 
+def check_gh(tokens: list[str]) -> tuple[str, str] | None:
+    """('deny'|'ask', reason) for a gh command that writes to GitHub; None for reads."""
+    words, i = [], 1
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in GH_VALUE_OPTS:
+            i += 2
+            continue
+        if not tok.startswith("-"):
+            words.append(tok)
+            if len(words) == 2:
+                break
+        i += 1
+    if not words or words[0] in GH_FREE_GROUPS:
+        return None
+    group, action = words[0], (words[1] if len(words) > 1 else None)
+
+    if group == "pr" and action == "merge":
+        return "deny", "Claude never merges. Tell the user the PR is ready; they merge it on GitHub."
+    if group == "api":
+        args = tokens[1:]  # flags may come before or after the endpoint
+        method = None
+        for j, tok in enumerate(args):
+            if tok in {"-X", "--method"} and j + 1 < len(args):
+                method = args[j + 1].upper()
+            elif tok.startswith("--method="):
+                method = tok.split("=", 1)[1].upper()
+            elif re.fullmatch(r"-X[A-Za-z]+", tok):
+                method = tok[2:].upper()
+        has_fields = any(t in GH_API_FIELD_OPTS or t.startswith(("--field=", "--raw-field=", "--input=")) for t in args)
+        if (method or ("POST" if has_fields else "GET")) != "GET":
+            return "ask", "This gh api call writes to GitHub. Confirm the endpoint and the change."
+        return None
+    if action is None or action in GH_READ_ACTIONS:
+        return None
+    return "ask", f"`gh {group} {action}` writes to GitHub. Confirm what will be created or changed."
+
+
 def check_segment(tokens: list[str], branch: str | None) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if not tokens:
@@ -169,6 +212,9 @@ def check_segment(tokens: list[str], branch: str | None) -> list[tuple[str, str]
             found.append(("ask", "This changes dependencies and the lockfile. Confirm the package and the workspace."))
         if "db:seed" in tokens:
             found.append(("ask", "db:seed may overwrite local database data."))
+
+    if head == "gh" and (gh := check_gh(tokens)):
+        found.append(gh)
 
     if head in {"docker", "docker-compose"} and "down" in tokens and ({"-v", "--volumes"} & set(tokens)):
         found.append(("ask", "docker compose down -v deletes the database volume."))
