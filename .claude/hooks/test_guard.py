@@ -87,6 +87,8 @@ class ReviewGate(GuardTest):
             "find . -maxdepth 0 -exec git push \\;", "eval git push", "git push origin --tags",
             "(git push)", "(cd . && git push)", "{ git push; }", "( git push );", "if true; then git push; fi",
             "sudo -u me git push", "! git push",
+            "pnpm exec git push", "pnpm --filter server exec git push", "pnpm dlx git push",
+            "npm exec -- git push", "npx git push", "yarn exec git push",
         ]])
         self.note("PASS")
         self.check([("timeout 60 git push", "ask"), ("X=1; git push", "ask"), ("(git push)", "ask")])
@@ -99,11 +101,24 @@ class ReviewGate(GuardTest):
             "git -c core.hooksPath=/dev/null push", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath git push",
             "rm .githooks/pre-push", "chmod -x .githooks/pre-push", "echo exit 0 > .githooks/pre-push",
             "bash -c 'git config core.hooksPath x'",
+            "git push --no-verif", "npx git push --no-verify", "pnpm exec git push --no-verify",
+            "git -c alias.p='push --no-verify' p origin feat/1-x", "git config alias.p 'push --no-verify'",
+            "git config --global alias.p push", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.p GIT_CONFIG_VALUE_0=push git p",
+            "printf '[core]\\n\\thooksPath = /dev/null\\n' >> .git/config", "tee -a .git/config",
+            "rm -rf .git/hooks", "sed -i '' s/x/y/ .git/config",
         ]])
         self.check([(c, "allow") for c in [
             "git config --get core.hooksPath", "cat .githooks/pre-push",
             "git commit -m '3: document core.hooksPath'",
+            "git config --get-regexp alias", "cat .git/config",
         ]])
+
+    def test_existing_aliases(self) -> None:
+        self.git("config", "alias.p", "push --no-verify")
+        self.git("config", "alias.n", "notes --ref=ai-review add -f -m x")
+        self.git("config", "alias.sh", "!git push")
+        self.git("config", "alias.st", "status --short")
+        self.check([("git p origin feat/1-x", "deny"), ("git n", "deny"), ("git sh", "deny"), ("git st", "allow")])
 
     def test_earlier_push_rules_still_win(self) -> None:
         self.note("PASS")
@@ -194,6 +209,10 @@ class WhoRecords(GuardTest):
         "git -c core.notesRef=ai-review notes add -m 'VERDICT: PASS' HEAD",
         "(git notes --ref=ai-review add -m x HEAD)",
         "{ git notes --ref=ai-review add -m x HEAD; }",
+        "git -c alias.n='notes --ref=ai-review add -f -m x' n",
+        "git config alias.n 'notes --ref=ai-review add -f -m x'",
+        "npx git notes --ref=ai-review add -m x",
+        "pnpm exec git notes --ref=ai-review add -m x",
     ]
     READS = [
         "scripts/review-status.sh get",
