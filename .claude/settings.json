@@ -82,6 +82,7 @@
       "denyWrite": [
         ".githooks/",
         ".git/config",
+        ".git/hooks/",
         ".git/refs/notes/",
         ".git/packed-refs"
       ]

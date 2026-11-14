@@ -53,9 +53,9 @@ $TMPDIR. So the cases above can no longer write the note, the hooks or git confi
 .githooks paths in .claude/settings.json.
 
 Still open, the known limits: `excludedCommands` (git push/fetch/pull, gh, docker compose,
-scripts/worktree.sh, scripts/review-status.sh) run unsandboxed and are matched on text, so for them
-this guard is the only check (a compose file edited in the repo runs unsandboxed through
-`docker compose`); a script that runs `git push --no-verify` is sandboxed but may reach GitHub,
+scripts/worktree.sh, scripts/review-status.sh) run unsandboxed and are matched on text, also after a
+leading `cd <dir> &&`, so for them this guard is the only check (a compose file edited in the repo
+runs unsandboxed through `docker compose`); a script that runs `git push --no-verify` is sandboxed but may reach GitHub,
 since in auto mode unlisted hosts were reachable (`network.strictAllowlist` lives in user or
 managed settings, not here); hooks and MCP servers run outside the sandbox. The main session writes
 the reviewer's prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is
