@@ -31,20 +31,28 @@ scripts/verify.sh
 
 Red: show the failing part and stop. The user decides whether you fix it now.
 
-Every fix, here or after the review, follows the same loop so that what is reviewed is what gets pushed: fix, commit with the `<KEY>: ` prefix, then run `/ship` again from step 1.
+A fix you make here (red verify, or after the user's decision on a review) follows the same loop so that what is reviewed is what gets pushed: fix, commit with the `<KEY>: ` prefix, then run `/ship` again from step 1. Blocker fixes inside the review are the `ship-branch` workflow's job (step 3).
 
-## 3. Review
+## 3. Review (the `ship-branch` workflow)
 
-Run the `reviewer` subagent with the issue number and the worktree path. Keep its full report. The reviewer records its verdict on HEAD (a git note, `scripts/review-status.sh`); then check it:
+Run the `ship-branch` workflow (Workflow tool, `name: "ship-branch"`); running it is part of the user's request to ship, so do not ask first:
+
+```
+args: { "key": <KEY>, "worktree": "<absolute worktree path>" }
+```
+
+Add `"since": "<sha>"` only for the one follow-up review after Should fix or Nit commits (below): the `sha` an earlier run of this session returned with PASS.
+
+The workflow decides the rounds in code: the `reviewer` reviews HEAD; on FAIL the `fixer` fixes the Blockers (each with a test, `scripts/verify.sh`, one `<KEY>: ` commit) and the `reviewer` reviews only the new commits; at most two fix rounds (`MAX_FIX_ROUNDS` in `.claude/workflows/ship-branch.js`). Do not run another round by hand. It returns `{ verdict, sha, readyForPr, stopReason, blockers, shouldFix, nits, rounds, finalReview }`. Keep `finalReview` and `rounds` for the PR body, then check the verdict on the commit:
 
 ```bash
 scripts/review-status.sh get
 ```
 
-- `VERDICT: FAIL`: show the Blockers with their scenarios and stop. When the user asks you to fix them, use the fix loop above.
-- `VERDICT: PASS` and `get` prints `PASS`: show Should fix and Nit items and ask, for each group: fix now (fix loop above; the new commits are reviewed again) or leave them. Offer `/new-issue` for anything left that is worth doing later.
-- Anything else (the agent errors or times out, the report's last line is not exactly `VERDICT: PASS`, or `get` does not print `PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
-- Never record a verdict yourself; the guard hook denies it outside the `reviewer` agent. If the `reviewer` agent is not available in this session (agents load when a session starts), stop and ask the user to start a new session: a stand-in subagent cannot record a verdict, so the push would be blocked.
+- `verdict` is `FAIL` (Blockers left after two fix rounds, or the fixer could not fix them): show `stopReason` and the Blockers with their scenarios, and stop. The user decides; a new fix after that is a new `/ship` run.
+- `readyForPr` is true and `get` prints `PASS`: show `shouldFix` and `nits` once and ask, for each group: fix now or leave them. They never start a fix round by themselves. Fix now: fix, commit with the `<KEY>: ` prefix, `scripts/verify.sh`, then run the workflow once more with `since` set to the PASS `sha` (one follow-up review of the new commits); its own Should fix and Nit items are listed for the user, not fixed. Offer `/new-issue` for anything left that is worth doing later.
+- Anything else (the workflow errors, `readyForPr` is false, or `get` does not print `PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
+- Never record a verdict yourself; the guard hook denies it outside the `reviewer` agent. If the `reviewer` or `fixer` agent or the `ship-branch` workflow is not available in this session (they load when a session starts), stop and ask the user to start a new session: a stand-in subagent cannot record a verdict, so the push would be blocked.
 
 ## 4. Draft the PR, wait for yes
 
@@ -67,7 +75,7 @@ Closes #<KEY>
 - <tests added, manual checks>
 
 ## Review
-VERDICT: PASS — <open Should fix / Nit items, or "no open items">
+VERDICT: PASS — <review/fix rounds from the workflow; open Should fix / Nit items, or "no open items">
 
 ## Not tested
 - <what could not be checked here, or "nothing">
@@ -79,7 +87,7 @@ Show title, labels, milestone (all copied from the issue) and the body. Wait for
 
 ## 5. Push and open the PR
 
-The guard hook asks before each of these; that is the code-level lock on top of the user's yes. Git's pre-push hook (`.githooks/pre-push`) rejects the push unless the pushed commit has the reviewer's PASS note, and the guard denies it early: a commit made after the review needs a new review (fix loop above). Never use `--no-verify`.
+The guard hook asks before each of these; that is the code-level lock on top of the user's yes. Git's pre-push hook (`.githooks/pre-push`) rejects the push unless the pushed commit has the reviewer's PASS note, and the guard denies it early: a commit made after the review needs a new review (step 3 again). Never use `--no-verify`.
 
 ```bash
 git push -u origin <branch>

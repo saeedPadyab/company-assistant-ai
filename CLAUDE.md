@@ -49,10 +49,10 @@ Run from the repo root.
 - Every write to GitHub (issue or PR create, edit, comment, close, label; `gh api` writes) needs the user's yes; the guard hook asks. Claude never merges a PR (`gh pr merge` is blocked).
 
 ## Review
-- Before push and PR, with all work committed and `scripts/verify.sh` green: run the `reviewer` subagent with the issue number and the worktree path.
+- Before push and PR, with all work committed and `scripts/verify.sh` green: run the review through `/ship` (step 3, the `ship-branch` workflow), which runs the `reviewer` subagent with the issue number and the worktree path.
 - The reviewer records its verdict on the commit it reviewed (`scripts/review-status.sh`, git notes `refs/notes/ai-review`). Only the reviewer may record; the guard hook denies it elsewhere. Git's own pre-push hook (`.githooks/pre-push`, turned on by `scripts/worktree.sh setup`) rejects a push unless each pushed ref's commit has PASS, so any new commit needs a new review; never use `--no-verify` or git aliases, or change `core.hooksPath`. Threat model and limits: issue #3 and the header of `.claude/hooks/guard.py`; a commit message or PR body that mentions these words goes in a file (`-F`). After the push, `scripts/review-status.sh publish` sets the `ai-review` commit status, which `main` requires next to `ci-ok` (`publish` writes to GitHub, so the guard asks). The status comes from the same local note, so it makes the verdict visible, not independent.
-- `VERDICT: FAIL`: fix the Blockers, commit, run the reviewer again on the new commits. Never argue a Blocker away or edit the review.
-- Should fix and Nit are not fixed automatically: list them for the user, who decides now or in a follow-up issue.
+- `/ship` step 3 runs the `ship-branch` workflow (`.claude/workflows/ship-branch.js`): the reviewer on HEAD, then on `VERDICT: FAIL` the `fixer` agent fixes the Blockers and the reviewer reviews only the new commits. At most two fix rounds, decided in code; Blockers left after that go to the user. Never start another round by hand. Never argue a Blocker away or edit the review. This caps cost, it is not a security lock (issue #7).
+- Should fix and Nit never start a round and are not fixed automatically: the workflow returns them once, and the user decides now (fix, then one follow-up review of the new commits) or in a follow-up issue.
 - Put the verdict and any open Should fix items in the PR description.
 
 ## Pull requests
