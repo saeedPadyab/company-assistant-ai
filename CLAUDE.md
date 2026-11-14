@@ -50,6 +50,7 @@ Run from the repo root.
 
 ## Review
 - Before push and PR, with all work committed and `scripts/verify.sh` green: run the `reviewer` subagent with the issue number and the worktree path.
+- The reviewer records its verdict on the commit it reviewed (`scripts/review-status.sh`, git notes `refs/notes/ai-review`). Only the reviewer may record; the guard hook denies it elsewhere. `git push` is denied unless the pushed commit has PASS, so any new commit needs a new review. After the push, `scripts/review-status.sh publish` sets the `ai-review` commit status, which `main` requires next to `ci-ok`.
 - `VERDICT: FAIL`: fix the Blockers, commit, run the reviewer again on the new commits. Never argue a Blocker away or edit the review.
 - Should fix and Nit are not fixed automatically: list them for the user, who decides now or in a follow-up issue.
 - Put the verdict and any open Should fix items in the PR description.

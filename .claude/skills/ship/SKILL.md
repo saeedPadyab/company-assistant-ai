@@ -8,7 +8,7 @@ argument-hint: "[issue number]"
 
 Order matters: never push or open a PR before verify is green, the reviewer said PASS and the user said yes. Claude never merges.
 
-Run every command in the issue's worktree. If this session is in the main checkout and the work is in `../company-assistant-wt/<KEY>`, prefix commands with `cd <worktree path> && `.
+Run every command in the issue's worktree. If this session is in the main checkout and the work is in `../<repo folder>-wt/<KEY>`, prefix commands with `cd <worktree path> && `.
 
 ## 1. Check the branch
 
@@ -35,12 +35,16 @@ Every fix, here or after the review, follows the same loop so that what is revie
 
 ## 3. Review
 
-Run the `reviewer` subagent with the issue number and the worktree path. Keep its full report.
+Run the `reviewer` subagent with the issue number and the worktree path. Keep its full report. The reviewer records its verdict on HEAD (a git note, `scripts/review-status.sh`); then check it:
+
+```bash
+scripts/review-status.sh get
+```
 
 - `VERDICT: FAIL`: show the Blockers with their scenarios and stop. When the user asks you to fix them, use the fix loop above.
-- `VERDICT: PASS`: show Should fix and Nit items and ask, for each group: fix now (fix loop above; the new commits are reviewed again) or leave them. Offer `/new-issue` for anything left that is worth doing later.
-- Anything else (the agent errors or times out, or the report's last line is not exactly `VERDICT: PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
-- If the `reviewer` agent is not available in this session (agents load when a session starts), run a general subagent told to follow `.claude/agents/reviewer.md` exactly and, in so many words: read-only, never edit, create or delete files, commit, push or write to GitHub. That subagent has every tool, so the read-only rule rests on the prompt; check `git status --porcelain` is unchanged after it returns.
+- `VERDICT: PASS` and `get` prints `PASS`: show Should fix and Nit items and ask, for each group: fix now (fix loop above; the new commits are reviewed again) or leave them. Offer `/new-issue` for anything left that is worth doing later.
+- Anything else (the agent errors or times out, the report's last line is not exactly `VERDICT: PASS`, or `get` does not print `PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
+- Never record a verdict yourself; the guard hook denies it outside the `reviewer` agent. If the `reviewer` agent is not available in this session (agents load when a session starts), stop and ask the user to start a new session: a stand-in subagent cannot record a verdict, so the push would be blocked.
 
 ## 4. Draft the PR, wait for yes
 
@@ -75,16 +79,17 @@ Show title, labels, milestone (all copied from the issue) and the body. Wait for
 
 ## 5. Push and open the PR
 
-The guard hook asks before each of these; that is the code-level lock on top of the user's yes.
+The guard hook asks before each of these; that is the code-level lock on top of the user's yes. It also denies the push unless the pushed commit has the reviewer's PASS note: a commit made after the review needs a new review (fix loop above).
 
 ```bash
 git push -u origin <branch>
+scripts/review-status.sh publish
 gh pr create --base main --title "<title>" --label "<label1>" --label "<label2>" --milestone "<milestone>" --body-file - <<'EOF'
 <body>
 EOF
 ```
 
-One `--label` per issue label (all of them); omit `--label` / `--milestone` when the issue has none.
+`publish` posts the verdict as the `ai-review` commit status on GitHub; `main` requires it, so the PR cannot merge without it. One `--label` per issue label (all of them); omit `--label` / `--milestone` when the issue has none.
 
 ## 6. After
 

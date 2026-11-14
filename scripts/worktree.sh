@@ -2,7 +2,7 @@
 # One worktree per GitHub issue, each with its own database.
 #
 #   scripts/worktree.sh new <issue> <slug> [type]   branch <type>/<issue>-<slug> from origin/main (type: feat|fix|chore|docs)
-#                                                   in ../company-assistant-wt/<issue>, then `setup`
+#                                                   in ../<repo folder>-wt/<issue>, then `setup`
 #   scripts/worktree.sh setup                       inside a worktree: .env files, database assistant_<issue>, install, migrate
 #   scripts/worktree.sh remove <issue> [--yes] [--force]
 #                                                   drop the database, remove the worktree, delete the branch if merged

@@ -9,6 +9,10 @@ Claude Code pipes the tool call as JSON on stdin. This script:
 Rules work on the parsed command, so word order and flags (`pnpm --filter server add x`,
 `git push origin HEAD:main`) do not get around them. It only sees the command text: a script
 that pushes on its own is out of reach (that is the sandbox's job).
+
+Review gate: `git push` is denied unless each pushed commit has the reviewer's PASS note
+(refs/notes/ai-review, scripts/review-status.sh), and only the `reviewer` subagent (hook input
+`agent_type`) may write that note.
 """
 
 from __future__ import annotations
@@ -38,6 +42,10 @@ GH_VALUE_OPTS = {"-R", "--repo", "--hostname"}
 GH_READ_ACTIONS = {"list", "view", "status", "diff", "checks", "watch", "download", "checkout"}
 GH_FREE_GROUPS = {"search", "browse", "help", "version", "completion"}
 GH_API_FIELD_OPTS = {"-f", "-F", "--field", "--raw-field", "--input"}
+# Review gate: the reviewer's verdict is a git note on the commit (scripts/review-status.sh)
+REVIEW_NOTES_REF = "ai-review"
+REVIEWER_AGENT = "reviewer"
+NOTES_WRITE_ACTIONS = {"add", "append", "edit", "copy", "remove", "merge", "prune"}
 
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n"}
@@ -103,7 +111,41 @@ def is_env_file(token: str) -> bool:
     return name.startswith(".env") and name != ".env.example"
 
 
-def check_push(args: list[str], branch: str | None) -> tuple[str, str]:
+def review_verdict(rev: str, cwd: str | None) -> str:
+    """PASS, FAIL or NONE: the reviewer's note on the commit `rev` names; UNKNOWN when `rev` is not a commit."""
+    def git(*a: str) -> subprocess.CompletedProcess | None:
+        try:
+            return subprocess.run(["git", *a], cwd=cwd or None, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+    sha = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
+    if not sha or sha.returncode != 0:
+        return "UNKNOWN"
+    note = git("notes", f"--ref={REVIEW_NOTES_REF}", "show", sha.stdout.strip())
+    first = note.stdout.splitlines()[0].strip() if note and note.returncode == 0 and note.stdout else ""
+    return {"VERDICT: PASS": "PASS", "VERDICT: FAIL": "FAIL"}.get(first, "NONE")
+
+
+def check_review_record(tokens: list[str], agent_type: str | None) -> tuple[str, str] | None:
+    """Only the reviewer subagent writes verdicts (refs/notes/ai-review)."""
+    if agent_type == REVIEWER_AGENT:
+        return None
+    reason = ("Only the reviewer subagent records a review verdict. Run the `reviewer` agent on this branch; "
+              "it reviews HEAD and records PASS or FAIL itself.")
+    for i, tok in enumerate(tokens[:-1]):
+        if os.path.basename(tok) == "review-status.sh" and tokens[i + 1] == "record":
+            return "deny", reason
+    sub, args = git_subcommand(tokens)
+    touches_ref = any(REVIEW_NOTES_REF in t for t in tokens[1:])
+    if sub == "notes" and touches_ref and set(args) & NOTES_WRITE_ACTIONS:
+        return "deny", reason
+    if sub in {"update-ref", "fetch", "pull"} and touches_ref:
+        return "deny", reason
+    return None
+
+
+def check_push(args: list[str], branch: str | None, cwd: str | None = None,
+               verdict_of=review_verdict) -> tuple[str, str]:
     """('deny'|'ask', reason) for `git push <args>`."""
     positional = []
     i = 0
@@ -131,6 +173,17 @@ def check_push(args: list[str], branch: str | None) -> tuple[str, str]:
             return "deny", f"Never push {dst}. Push a feature branch and open a PR."
     if not refspecs and branch in PROTECTED:
         return "deny", f"You are on {branch}: this push would update it. Create a feature branch from origin/main and open a PR."
+    # Review gate: every pushed commit needs the reviewer's PASS note (deletions `:dst` push nothing)
+    sources = [s.split(":", 1)[0] for s in refspecs] if refspecs else ["HEAD"]
+    for src in (s for s in sources if s):
+        verdict = verdict_of(src, cwd)
+        if verdict == "PASS":
+            continue
+        if verdict == "UNKNOWN":
+            return "deny", f"Could not resolve `{src}` to a commit, so its review verdict cannot be checked. Push a branch name or HEAD."
+        why = "the reviewer failed it" if verdict == "FAIL" else "it has no review verdict (new commits need a new review)"
+        return "deny", (f"Push blocked: `{src}` is not reviewed: {why}. Run the `reviewer` agent on this branch; "
+                        f"it records the verdict with scripts/review-status.sh. Push only after PASS.")
     return "ask", "git push sends code off this machine. Confirm the branch and remote."
 
 
@@ -172,11 +225,15 @@ def check_gh(tokens: list[str]) -> tuple[str, str] | None:
     return "ask", f"`gh {group} {action}` writes to GitHub. Confirm what will be created or changed."
 
 
-def check_segment(tokens: list[str], branch: str | None) -> list[tuple[str, str]]:
+def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
+                  agent_type: str | None = None, verdict_of=review_verdict) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     if not tokens:
         return found
     head = os.path.basename(tokens[0])
+
+    if record := check_review_record(tokens, agent_type):
+        found.append(record)
 
     # .env contents through the shell (Read(...) deny rules only cover the Read tool)
     if head in READERS and any(is_env_file(t) for t in tokens[1:]):
@@ -189,7 +246,7 @@ def check_segment(tokens: list[str], branch: str | None) -> list[tuple[str, str]
 
     sub, args = git_subcommand(tokens)
     if sub == "push":
-        found.append(check_push(args, branch))
+        found.append(check_push(args, branch, cwd, verdict_of))
     elif sub == "commit" and branch in PROTECTED:
         found.append(("deny", f"Never commit on {branch}. Create a branch from origin/main first: git switch -c <branch> origin/main"))
     elif sub == "reset" and "--hard" in args:
@@ -231,7 +288,8 @@ def git_dir_option(tokens: list[str]) -> str | None:
     return None
 
 
-def decide(command: str, cwd: str | None, branch_of=current_branch) -> tuple[str, str] | None:
+def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: str | None = None,
+           verdict_of=review_verdict) -> tuple[str, str] | None:
     """Follows `cd <dir>` and `git -C <dir>` so a commit in a worktree is checked against that worktree's branch."""
     results: list[tuple[str, str]] = []
     cache: dict[str | None, str | None] = {}
@@ -248,7 +306,7 @@ def decide(command: str, cwd: str | None, branch_of=current_branch) -> tuple[str
         where = cwd
         if os.path.basename(tokens[0]) == "git" and (d := git_dir_option(tokens)):
             where = os.path.join(cwd or os.getcwd(), os.path.expanduser(d))
-        results.extend(check_segment(tokens, branch_in(where)))
+        results.extend(check_segment(tokens, branch_in(where), where, agent_type, verdict_of))
     for kind in ("deny", "ask"):
         reasons = [r for k, r in results if k == kind]
         if reasons:
@@ -265,7 +323,8 @@ def main() -> int:
     command = (payload.get("tool_input") or {}).get("command") or ""
     if not command:
         return 0
-    decision = decide(command, payload.get("cwd"))
+    # agent_type is set by Claude Code: the subagent's name inside a subagent, absent in the main session
+    decision = decide(command, payload.get("cwd"), agent_type=payload.get("agent_type"))
     if not decision:
         return 0
     kind, reason = decision
