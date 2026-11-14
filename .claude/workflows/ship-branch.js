@@ -98,7 +98,8 @@ const review = (label, fromSha, earlier) => agent(
     ? `Follow-up mode, previous reviewed SHA ${fromSha}: review only ${fromSha}..HEAD (your "Follow-up mode" section).\n` +
       (earlier.length
         ? `The previous review found these Blockers; say for each whether the new commits fix it:\n${formatBlockers(earlier)}\n`
-        : 'The previous review of that commit passed; there are no earlier Blockers to check.\n')
+        : 'No earlier Blockers were given: the caller says an earlier review passed that commit. Check that it did ' +
+          '(your "Follow-up mode" step 1) and fall back to full mode if it did not.\n')
     : 'Full review of the branch against origin/main.\n') +
   'Record your verdict on HEAD as your procedure says, then return the structured result (markdown = your full report).',
   { agentType: 'reviewer', schema: REVIEW_SCHEMA, phase: label === 'review' ? 'Review' : 'Fix', label },
