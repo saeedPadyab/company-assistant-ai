@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# Review gate, enforced by git itself: every ref pushed must point at a commit the reviewer passed.
+#
+# git runs this before any push, however it was started (a subshell, an alias, `pnpm exec`, a script),
+# so it holds where .claude/hooks/guard.py, which only reads command text, cannot. The verdict is the
+# git note the reviewer records (refs/notes/ai-review, scripts/review-status.sh). The tip of each pushed
+# ref is checked, and the review covers the whole branch up to it; deletions push nothing and pass.
+#
+# Turned on by `git config core.hooksPath .githooks` (scripts/worktree.sh setup does it).
+# It applies to people too: push after the reviewer's PASS, or skip it knowingly with --no-verify
+# (the guard denies --no-verify to Claude).
+set -uo pipefail
+
+failed=0
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per pushed ref
+while read -r local_ref local_sha remote_ref _remote_sha; do
+  [ -n "${local_sha:-}" ] || continue
+  if [[ "$local_sha" =~ ^0+$ ]]; then
+    continue  # deleting $remote_ref
+  fi
+  if ! commit="$(git rev-parse --verify --quiet "$local_sha^{commit}")"; then
+    echo "pre-push: $local_ref is not a commit; only reviewed commits are pushed." >&2
+    failed=1
+    continue
+  fi
+  first="$(git notes --ref=ai-review show "$commit" 2>/dev/null | head -n 1)"
+  case "$first" in
+    "VERDICT: PASS") ;;
+    "VERDICT: FAIL")
+      echo "pre-push: $local_ref (${commit:0:7}) -> $remote_ref: the reviewer failed this commit. Fix the Blockers, commit, review again." >&2
+      failed=1 ;;
+    *)
+      echo "pre-push: $local_ref (${commit:0:7}) -> $remote_ref: no review verdict. Run the reviewer on this commit (new commits need a new review)." >&2
+      failed=1 ;;
+  esac
+done
+exit "$failed"

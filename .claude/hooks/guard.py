@@ -10,17 +10,21 @@ Rules work on the parsed command, so word order and flags (`pnpm --filter server
 `git push origin HEAD:main`) do not get around them. It only sees the command text: a script
 that pushes on its own is out of reach (that is the sandbox's job).
 
-Wrappers (`timeout 60`, `nice`, `nohup`, `env X=1`) are stripped first. Commands that run other
+Subshells and groups (`(cd x && git push)`, `{ ...; }`), shell keywords (`if`, `then`, `do`) and
+wrappers (`timeout 60`, `nice`, `nohup`, `sudo -u x`, `env X=1`) are split off or stripped first. Commands that run other
 commands (`xargs`, `find -exec`, `bash -c`, `eval`) cannot be parsed, so a `git push` or a write
 to the verdict ref inside them is denied. If this script crashes, the command is denied.
 
-Review gate: `git push` is denied unless the tip of each pushed ref (HEAD when no refspec) has the
-reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh); `--tags` is denied. Only the
+Review gate: the lock on pushes is git's own pre-push hook (.githooks/pre-push), which git runs
+however the push was started. This guard adds an early, readable deny for a plain `git push` without
+the reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh), and denies what would
+switch the hook off: `--no-verify`, any change to core.hooksPath, and shell writes to .githooks/. Only the
 `reviewer` subagent (hook input `agent_type`) may write that ref: outside it, a git command that
-names the ref (refs/notes/ai-review, --ref ai-review, a notes.* config) is denied except reads, and
+names the ref (refs/notes/ai-review, --ref ai-review, notes.* or core.notesRef config) is denied except reads, and
 so is any VAR=...ai-review assignment. `review-status.sh publish` writes to GitHub, so it asks.
-Known limits: the hook sees only the command text, so a script that writes the note, a variable
-built in pieces, or a file edit under .git/ is not seen. The main session writes the reviewer's
+Known limits: the record ban sees only the command text, so a script or inline interpreter
+(`python3 -c`, `node -e`) that writes the note, a variable built in pieces, or a file edit under .git/
+is not seen; neither is an edit of .githooks/pre-push with an editor tool (it shows in the PR diff). The main session writes the reviewer's
 prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same
 local note, so it is not an independent check; it makes the verdict visible and required on the PR.
 
@@ -61,33 +65,37 @@ NOTES_READ_ACTIONS = {"show", "list", "get-ref"}
 GIT_READ_SUBS = {"log", "show", "rev-parse", "status", "diff"}
 RECORD_DENIED = ("Only the reviewer subagent records a review verdict. Run the `reviewer` agent on this branch; "
                  "it reviews HEAD and records PASS or FAIL itself.")
+HOOK_WRITERS = {"rm", "mv", "cp", "chmod", "ln", "tee", "truncate", "unlink", "install", "perl", "dd"}
 # Commands that run another command given as arguments: the guard cannot parse what they run
 EXEC_HEADS = {"xargs", "find", "bash", "sh", "zsh", "dash", "eval", "parallel", "watch", "script", "su", "fd"}
 # Prefixes dropped before the real command; value: options of theirs that take a value
 WRAPPERS = {
-    "sudo": set(), "env": set(), "command": set(), "exec": set(), "time": set(), "nohup": set(),
+    "sudo": {"-u", "-g", "-C", "-D", "-p", "-U", "-h", "-r", "-t", "-T"}, "env": {"-u", "-C", "-S"},
+    "command": set(), "exec": set(), "time": set(), "nohup": set(),
+    "if": set(), "then": set(), "else": set(), "elif": set(), "do": set(), "while": set(), "until": set(), "!": set(),
     "timeout": {"-k", "--kill-after", "-s", "--signal"}, "nice": {"-n", "--adjustment"},
     "stdbuf": {"-i", "-o", "-e"}, "ionice": {"-c", "-n", "-p"},
 }
 
 
-SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n"}
+SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n", "{", "}"}
+SEPARATOR_RUN = re.compile(r"[;&|()\n]+")  # shlex joins adjacent punctuation: `);`, `)&&`, `((`
 
 
 def segments_of(command: str) -> list[list[str]]:
     """The command's simple commands as token lists, split on ; && || | & and newlines outside quotes.
     Redirections come out as their own tokens (`<`, `>`, `2>&1` -> `2`, `>&`, `1`)."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>\n")
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|<>()\n")
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     lexer.commenters = ""
     try:
         tokens = list(lexer)
     except ValueError:  # unbalanced quotes: fall back to a plain split
-        tokens = re.split(r"\s+|(?=[;&|\n])|(?<=[;&|\n])", command)
+        tokens = re.split(r"\s+|(?=[;&|()\n])|(?<=[;&|()\n])", command)
     segments, current = [], []
     for tok in tokens:
-        if tok in SEPARATORS:
+        if tok in SEPARATORS or SEPARATOR_RUN.fullmatch(tok):
             segments.append(current)
             current = []
         elif tok:
@@ -169,7 +177,9 @@ def names_review_ref(tokens: list[str]) -> bool:
             continue
         prev = tokens[i - 1] if i else ""
         if ("notes/" + REVIEW_NOTES_REF in tok or tok.startswith(("--ref=", "--notes=", "notes."))
-                or prev in {"--ref", "--notes"} or (prev.startswith("notes.") and "=" not in prev)):
+                or tok.lower().startswith("core.notesref=")
+                or prev in {"--ref", "--notes"} or (prev.startswith("notes.") and "=" not in prev)
+                or prev.lower() == "core.notesref"):
             return True
     return False
 
@@ -231,6 +241,8 @@ def check_push(args: list[str], branch: str | None, cwd: str | None = None,
             return "deny", "No force push. Push a new commit instead."
         if arg in {"--all", "--mirror"}:
             return "deny", f"`git push {arg}` would push {'/'.join(sorted(PROTECTED))}. Push one feature branch."
+        if arg in {"--no-verify", "--no-verif", "--no-veri"}:
+            return "deny", "No --no-verify: it skips the pre-push review check. Get the reviewer's PASS, then push."
         if arg in {"--tags", "--follow-tags"}:
             return "deny", f"`git push {arg}` pushes tagged commits the review gate does not check. Push the branch."
         if arg.startswith("-"):
@@ -309,6 +321,13 @@ def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
 
     if record := check_review_record(tokens, agent_type):
         found.append(record)
+    sets_hooks = (head == "git" and any(t.lower().startswith("core.hookspath") for t in tokens)) or (
+        head in EXEC_HEADS and any("hookspath" in t.lower() for t in tokens))
+    if sets_hooks and not ({"--get", "--get-all", "-l", "--list"} & set(tokens)):
+        found.append(("deny", "core.hooksPath turns the pre-push review check on or off. Leave it as `.githooks`."))
+    if head in HOOK_WRITERS and any(".githooks" in t for t in tokens[1:]) or any(
+            t in {">", ">>", ">|"} and ".githooks" in nxt for t, nxt in zip(tokens, tokens[1:])):
+        found.append(("deny", ".githooks/ holds the pre-push review check. Change it in an issue and PR, not from the shell."))
     if head in EXEC_HEADS and re.search(r"(^|\s)(\S*/)?git\s(.*\s)?push\b", " ".join(tokens)):
         found.append(("deny", f"Run `git push` directly, not through `{head}`, so the guard can check the branch and the review."))
 
@@ -381,6 +400,8 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
     if agent_type != REVIEWER_AGENT and re.search(
             r"(^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*=['\"]?[^\s;&|]*" + re.escape(REVIEW_NOTES_REF), command):
         results.append(("deny", RECORD_DENIED))
+    if re.search(r"(^|[\s;&|(])[A-Za-z_][A-Za-z0-9_]*=['\"]?[^\s;&|]*hookspath", command, re.IGNORECASE):
+        results.append(("deny", "core.hooksPath turns the pre-push review check on or off. Leave it as `.githooks`."))
     for tokens in segments_of(command):
         if tokens[0] == "cd" and len(tokens) > 1:
             cwd = os.path.join(cwd or os.getcwd(), os.path.expanduser(tokens[1]))

@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard.py")
+GITHOOKS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".githooks")
 
 
 def run_guard(command: str, cwd: str, agent_type: str | None = None) -> str:
@@ -84,13 +85,85 @@ class ReviewGate(GuardTest):
             "timeout -k 5 60 git push", "nice git push", "nice -n 5 git push", "nohup git push",
             "env X=1 git push", "echo HEAD | xargs git push origin", "bash -c 'git push'",
             "find . -maxdepth 0 -exec git push \\;", "eval git push", "git push origin --tags",
+            "(git push)", "(cd . && git push)", "{ git push; }", "( git push );", "if true; then git push; fi",
+            "sudo -u me git push", "! git push",
         ]])
         self.note("PASS")
-        self.check([("timeout 60 git push", "ask"), ("X=1; git push", "ask")])
+        self.check([("timeout 60 git push", "ask"), ("X=1; git push", "ask"), ("(git push)", "ask")])
+
+    def test_the_pre_push_hook_stays_on(self) -> None:
+        self.note("PASS")
+        self.check([(c, "deny") for c in [
+            "git push --no-verify", "git push -u origin feat/1-x --no-verify",
+            "git config core.hooksPath /dev/null", "git config --unset core.hooksPath",
+            "git -c core.hooksPath=/dev/null push", "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath git push",
+            "rm .githooks/pre-push", "chmod -x .githooks/pre-push", "echo exit 0 > .githooks/pre-push",
+            "bash -c 'git config core.hooksPath x'",
+        ]])
+        self.check([(c, "allow") for c in [
+            "git config --get core.hooksPath", "cat .githooks/pre-push",
+            "git commit -m '3: document core.hooksPath'",
+        ]])
 
     def test_earlier_push_rules_still_win(self) -> None:
         self.note("PASS")
         self.check([("git push origin main", "deny"), ("git push --force", "deny"), ("git push origin +feat/1-x", "deny")])
+
+
+class PrePushHook(GuardTest):
+    """.githooks/pre-push with real pushes to a local bare remote: git runs it however the push starts."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.remote = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.remote, True)
+        subprocess.run(["git", "init", "-q", "--bare", self.remote], check=True)
+        self.git("remote", "add", "origin", self.remote)
+        self.git("config", "core.hooksPath", os.path.abspath(GITHOOKS))
+
+    def push(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(["git", "push", "-q", *args], cwd=self.repo, capture_output=True, text=True)
+
+    def test_unreviewed_push_fails(self) -> None:
+        p = self.push("origin", "feat/1-x")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no review verdict", p.stderr)
+
+    def test_failed_review_fails(self) -> None:
+        self.note("FAIL")
+        self.assertIn("failed this commit", self.push("origin", "feat/1-x").stderr)
+
+    def test_pass_pushes_and_new_commit_needs_review(self) -> None:
+        self.note("PASS")
+        self.assertEqual(self.push("origin", "feat/1-x").returncode, 0)
+        self.commit("two")
+        self.assertNotEqual(self.push("origin", "feat/1-x").returncode, 0)
+
+    def test_paths_the_guard_cannot_see_still_hit_the_hook(self) -> None:
+        for cmd in (["sh", "-c", "(git push -q origin feat/1-x)"],
+                    ["git", "-c", "alias.p=push", "p", "-q", "origin", "feat/1-x"],
+                    [sys.executable, "-c", "import subprocess; raise SystemExit(subprocess.call(['git','push','-q','origin','feat/1-x']))"]):
+            with self.subTest(cmd=cmd):
+                self.assertNotEqual(subprocess.run(cmd, cwd=self.repo, capture_output=True).returncode, 0)
+
+    def test_every_pushed_ref_is_checked(self) -> None:
+        self.git("branch", "other")  # same commit, then a new unreviewed one on it
+        self.git("switch", "-q", "other")
+        self.commit("unreviewed")
+        self.git("switch", "-q", "feat/1-x")
+        self.note("PASS")
+        self.assertNotEqual(self.push("origin", "feat/1-x", "other").returncode, 0)
+        self.git("config", "push.default", "matching")
+        self.assertEqual(self.push("origin", "feat/1-x").returncode, 0)
+        self.git("push", "-q", "--no-verify", "origin", "other")  # `other` now exists on the remote
+        self.git("switch", "-q", "other")
+        self.commit("more")
+        self.git("switch", "-q", "feat/1-x")
+        self.assertNotEqual(self.push().returncode, 0)  # matching pushes `other` too: caught
+
+    def test_deleting_a_branch_passes(self) -> None:
+        self.git("push", "-q", "--no-verify", "origin", "feat/1-x:old")
+        self.assertEqual(self.push("origin", ":old").returncode, 0)
 
 
 class WhoRecords(GuardTest):
@@ -117,6 +190,10 @@ class WhoRecords(GuardTest):
         "bash -c 'scripts/review-status.sh record PASS x'",
         "echo PASS | xargs scripts/review-status.sh record",
         "git config notes.displayRef ai-review",
+        "git config core.notesRef ai-review",
+        "git -c core.notesRef=ai-review notes add -m 'VERDICT: PASS' HEAD",
+        "(git notes --ref=ai-review add -m x HEAD)",
+        "{ git notes --ref=ai-review add -m x HEAD; }",
     ]
     READS = [
         "scripts/review-status.sh get",

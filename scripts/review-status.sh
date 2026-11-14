@@ -6,7 +6,8 @@
 #   scripts/review-status.sh publish                        after push: HEAD's verdict as the `ai-review` commit status on GitHub
 #
 # The verdict is a git note under refs/notes/ai-review, bound to the commit SHA: any new commit has no
-# verdict until it is reviewed. guard.py blocks `git push` unless the pushed commit has a PASS note.
+# verdict until it is reviewed. .githooks/pre-push rejects a push unless the pushed commit has a PASS note
+# (guard.py also denies it early). `record` needs no uncommitted changes to tracked files.
 # Notes are local (never pushed); `publish` is what GitHub sees, and the `main` ruleset requires it.
 set -euo pipefail
 

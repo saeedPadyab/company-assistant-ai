@@ -79,7 +79,7 @@ Show title, labels, milestone (all copied from the issue) and the body. Wait for
 
 ## 5. Push and open the PR
 
-The guard hook asks before each of these; that is the code-level lock on top of the user's yes. It also denies the push unless the pushed commit has the reviewer's PASS note: a commit made after the review needs a new review (fix loop above).
+The guard hook asks before each of these; that is the code-level lock on top of the user's yes. Git's pre-push hook (`.githooks/pre-push`) rejects the push unless the pushed commit has the reviewer's PASS note, and the guard denies it early: a commit made after the review needs a new review (fix loop above). Never use `--no-verify`.
 
 ```bash
 git push -u origin <branch>
