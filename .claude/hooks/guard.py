@@ -24,7 +24,9 @@ Two layers:
      push, write notes or change hooks is denied where it is used.
 
 Review gate (issue #3): the lock on pushes is git's own pre-push hook (.githooks/pre-push), which
-git runs however the push was started. This guard denies what would switch it off (above, plus
+git runs however the push was started. A verdict note names the commit it was written for, so a
+note git copies to another commit (amend or rebase with notes.rewriteRef, from the command or from
+~/.gitconfig) does not count. This guard denies what would switch it off (above, plus
 shell or git writes to .githooks/ and .git/config), checks before any push that git will run it,
 and gives an early, readable deny for a push without the reviewer's PASS note. Only the
 `reviewer` subagent (hook input `agent_type`) may write the note. `review-status.sh publish`
@@ -34,7 +36,8 @@ Threat model (issue #3): in scope is Claude pushing or recording a verdict by mi
 shortcut, in any ordinary way of writing the command. Out of scope, closed by the sandbox
 (roadmap step 12), and so the known limits: a script, Makefile target or inline interpreter
 (`python3 -c`, `node -e`) that pushes with --no-verify, writes the note or edits .git/; words
-built from pieces (`R=ai; $R-review`, `--no-$V`); an editor-tool edit of .githooks/pre-push or
+built from pieces (`R=ai; $R-review`, `--no-$V`, quotes inside a word: `ai-'review'`) and a command
+name held in a variable (`S=scripts/review-status.sh; $S record`); an editor-tool edit of .githooks/pre-push or
 .git/config (a hook edit shows in the PR diff). The main session writes the reviewer's prompt, so
 it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same local
 note, so it makes the verdict visible and required on the PR; it is not an independent check.
@@ -199,9 +202,12 @@ def review_verdict(rev: str, cwd: str | None) -> str:
     sha = git("rev-parse", "--verify", "--quiet", f"{rev}^{{commit}}")
     if not sha or sha.returncode != 0:
         return "UNKNOWN"
-    note = git("notes", f"--ref={REVIEW_NOTES_REF}", "show", sha.stdout.strip())
-    first = note.stdout.splitlines()[0].strip() if note and note.returncode == 0 and note.stdout else ""
-    return {"VERDICT: PASS": "PASS", "VERDICT: FAIL": "FAIL"}.get(first, "NONE")
+    commit = sha.stdout.strip()
+    note = git("notes", f"--ref={REVIEW_NOTES_REF}", "show", commit)
+    lines = note.stdout.splitlines() if note and note.returncode == 0 else []
+    if f"commit: {commit}" not in lines:  # no note, or one git copied here from another commit
+        return "NONE"
+    return {"VERDICT: PASS": "PASS", "VERDICT: FAIL": "FAIL"}.get(lines[0].strip(), "NONE")
 
 
 def names_review_ref(tokens: list[str]) -> bool:
@@ -487,6 +493,11 @@ def scan_raw(command: str, agent_type: str | None) -> list[tuple[str, str]]:
             or re.search(r"(remove|rename)-section\s+['\"]?core\b", lower)):
         found.append(("deny", "core.hooksPath, include.path and the [core] section decide whether the pre-push "
                               "review check runs; they are not changed from Claude. (Text that mentions them goes in a file: -F.)"))
+    if re.search(r"rewriteref|notes_rewrite|notes\.rewrite", lower):
+        found.append(("deny", "notes.rewriteRef / GIT_NOTES_REWRITE_REF copy notes onto rewritten commits; "
+                              "they are not set from Claude. (Text that mentions them goes in a file: -F.)"))
+    if "statuses" in lower and REVIEW_NOTES_REF in command and "review-status.sh" not in command:
+        found.append(("deny", "The `ai-review` commit status is posted only by scripts/review-status.sh publish."))
     if agent_type != REVIEWER_AGENT and REVIEW_NOTES_REF in command and NOTES_WRITE.search(command):
         found.append(("deny", RECORD_DENIED + " (Text that mentions the verdict ref with notes or update-ref goes in a file: -F.)"))
     return found

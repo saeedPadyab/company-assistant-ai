@@ -6,7 +6,8 @@
 #   scripts/review-status.sh publish                        after push: HEAD's verdict as the `ai-review` commit status on GitHub
 #
 # The verdict is a git note under refs/notes/ai-review, bound to the commit SHA: any new commit has no
-# verdict until it is reviewed. .githooks/pre-push rejects a push unless the pushed commit has a PASS note
+# verdict until it is reviewed. The note also names the commit it was written for, so a note that git
+# copies to another commit (amend or rebase with notes.rewriteRef, `git notes copy`) does not count. .githooks/pre-push rejects a push unless the pushed commit has a PASS note
 # (guard.py also denies it early). `record` needs no uncommitted changes to tracked files.
 # Notes are local (never pushed); `publish` is what GitHub sees, and the `main` ruleset requires it.
 set -euo pipefail
@@ -16,9 +17,12 @@ CONTEXT="ai-review"
 
 die() { echo "review-status: $*" >&2; exit 1; }
 
-verdict_of() {  # verdict_of <rev>: PASS, FAIL or NONE
-  local first
-  first="$(git notes --ref="$NOTES_REF" show "$1" 2>/dev/null | head -n 1)" || true
+verdict_of() {  # verdict_of <rev>: PASS, FAIL or NONE (also NONE when the note was written for another commit)
+  local sha note first
+  sha="$(git rev-parse --verify --quiet "$1^{commit}")" || { echo NONE; return; }
+  note="$(git notes --ref="$NOTES_REF" show "$sha" 2>/dev/null)" || true
+  grep -qx "commit: $sha" <<<"$note" || { echo NONE; return; }
+  first="$(head -n 1 <<<"$note")"
   case "$first" in
     "VERDICT: PASS") echo PASS ;;
     "VERDICT: FAIL") echo FAIL ;;
@@ -31,7 +35,8 @@ cmd_record() {
   [[ "$verdict" =~ ^(PASS|FAIL)$ ]] || die "usage: record PASS|FAIL \"<summary>\""
   [ -n "$summary" ] || die "a one-line summary is required"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes: the verdict must be for a commit, so commit or stash first"
-  git notes --ref="$NOTES_REF" add -f -m "VERDICT: $verdict" -m "$summary" -m "reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" HEAD
+  git notes --ref="$NOTES_REF" add -f -m "VERDICT: $verdict" -m "$summary" \
+    -m "reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" -m "commit: $(git rev-parse HEAD)" HEAD
   echo "recorded $verdict on $(git rev-parse --short HEAD)"
 }
 

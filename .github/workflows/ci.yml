@@ -95,8 +95,15 @@ jobs:
       - run: pnpm --filter server db:seed
       - run: pnpm exec turbo run typecheck lint test --filter=server
 
+  hooks:
+    # the Claude Code guard and the pre-push review hook: no turbo package, so always run (a few seconds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -B .claude/hooks/test_guard.py
+
   ci-ok:
-    needs: [affected, web, server]
+    needs: [affected, web, server, hooks]
     if: always()
     runs-on: ubuntu-latest
     steps:

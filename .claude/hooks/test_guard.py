@@ -15,6 +15,7 @@ import tempfile
 import unittest
 
 GUARD = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guard.py")
+REVIEW_STATUS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "scripts", "review-status.sh")
 GITHOOKS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".githooks")
 
 
@@ -47,8 +48,11 @@ class GuardTest(unittest.TestCase):
     def commit(self, msg: str) -> None:
         self.git("commit", "-q", "--allow-empty", "-m", msg)
 
-    def note(self, verdict: str) -> None:
-        self.git("notes", "--ref=ai-review", "add", "-f", "-m", f"VERDICT: {verdict}", "HEAD")
+    def note(self, verdict: str, commit: str | None = None) -> None:
+        """A verdict note on HEAD as review-status.sh writes it; `commit` overrides the commit it names."""
+        commit = commit or self.git("rev-parse", "HEAD").strip()
+        self.git("notes", "--ref=ai-review", "add", "-f", "-m", f"VERDICT: {verdict}", "-m", "summary",
+                 "-m", f"commit: {commit}", "HEAD")
 
     def check(self, cases: list[tuple[str, str]], agent_type: str | None = None, cwd: str | None = None) -> None:
         for command, want in cases:
@@ -78,6 +82,12 @@ class ReviewGate(GuardTest):
         self.note("PASS")
         self.commit("two")
         self.check([("git push", "deny"), ("git push origin feat/1-x~1:feat/1-x", "ask")])
+
+    def test_a_note_for_another_commit_does_not_count(self) -> None:
+        self.git("notes", "--ref=ai-review", "add", "-f", "-m", "VERDICT: PASS", "HEAD")  # names no commit
+        self.check([("git push", "deny")])
+        self.note("PASS", commit="0" * 40)
+        self.check([("git push", "deny")])
 
     def test_push_of_unknown_ref_is_denied(self) -> None:
         self.check([("git push origin nosuchref", "deny")])
@@ -199,6 +209,14 @@ class PrePushHook(GuardTest):
         self.git("switch", "-q", "feat/1-x")
         self.assertNotEqual(self.push().returncode, 0)  # matching pushes `other` too: caught
 
+    def test_a_pass_copied_by_amend_does_not_count(self) -> None:
+        self.note("PASS")
+        self.git("-c", "notes.rewriteRef=refs/notes/*", "commit", "-q", "--amend", "--allow-empty", "-m", "changed")
+        self.assertIn("VERDICT: PASS", self.git("notes", "--ref=ai-review", "show", "HEAD"))  # git copied it
+        self.assertIn("no review verdict", self.push("origin", "feat/1-x").stderr)
+        get = subprocess.run([REVIEW_STATUS, "get"], cwd=self.repo, capture_output=True, text=True)
+        self.assertEqual(get.stdout.strip(), "NONE")
+
     def test_deleting_a_branch_passes(self) -> None:
         self.git("push", "-q", "--no-verify", "origin", "feat/1-x:old")
         self.assertEqual(self.push("origin", ":old").returncode, 0)
@@ -241,6 +259,11 @@ class WhoRecords(GuardTest):
         'msg="$(git notes --ref=ai-review add -f -m PASS HEAD 2>&1)"',
         "echo `git notes --ref=ai-review add -m x`",
         "git notes --re=ai-review add -m 'VERDICT: PASS' HEAD",
+        "git -c notes.rewriteRef='refs/notes/*' commit --amend --no-edit",
+        "GIT_NOTES_REWRITE_REF='refs/notes/*' git commit --amend --no-edit",
+        "git config notes.rewriteRef 'refs/notes/*'",
+        "git -c notes.rewriteRef=refs/notes/* rebase origin/main",
+        "gh api repos/o/r/statuses/abc -f context=ai-review -f state=success",
     ]
     READS = [
         "scripts/review-status.sh get",
