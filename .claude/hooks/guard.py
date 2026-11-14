@@ -26,21 +26,31 @@ Two layers:
 Review gate (issue #3): the lock on pushes is git's own pre-push hook (.githooks/pre-push), which
 git runs however the push was started. A verdict note names the commit it was written for, so a
 note git copies to another commit (amend or rebase with notes.rewriteRef, from the command or from
-~/.gitconfig) does not count. This guard denies what would switch it off (above, plus
-shell or git writes to .githooks/ and .git/config), checks before any push that git will run it,
-and gives an early, readable deny for a push without the reviewer's PASS note. Only the
-`reviewer` subagent (hook input `agent_type`) may write the note. `review-status.sh publish`
-writes to GitHub, so it asks.
+~/.gitconfig) does not count. This guard denies what would switch it off (above, plus shell or
+git writes to .githooks/, .git/config, .git/refs/ and .git/packed-refs, which hold the verdict
+note, and to .claude/settings*.json, where `disableAllHooks` turns this guard off; the Edit and
+Write tools on those settings files are denied in .claude/settings.json), checks before any push
+that git will run it, and gives an early, readable deny for a push without the reviewer's PASS
+note. These paths are matched as text anywhere in a writer's arguments, so a copy out of them
+(`cp .git/refs/notes/ai-review /tmp/x`) is denied too, on purpose; reading them (`cat`) is not.
+Only the `reviewer` subagent (hook input `agent_type`) may write the note.
+`review-status.sh publish` writes to GitHub, so it asks.
 
 Threat model (issue #3): in scope is Claude pushing or recording a verdict by mistake or as a
 shortcut, in any ordinary way of writing the command. Out of scope, closed by the sandbox
 (roadmap step 12), and so the known limits: a script, Makefile target or inline interpreter
 (`python3 -c`, `node -e`) that pushes with --no-verify, writes the note or edits .git/; words
-built from pieces (`R=ai; $R-review`, `--no-$V`, quotes inside a word: `ai-'review'`) and a command
-name held in a variable (`S=scripts/review-status.sh; $S record`); an editor-tool edit of .githooks/pre-push or
-.git/config (a hook edit shows in the PR diff). The main session writes the reviewer's prompt, so
-it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same local
-note, so it makes the verdict visible and required on the PR; it is not an independent check.
+built from pieces (`R=ai; $R-review`, `--no-$V`, quotes inside a word: `ai-'review'`) and a
+command name held in a variable (`S=scripts/review-status.sh; $S record`); an editor-tool edit of
+.githooks/pre-push, .git/config, .git/refs/ or .git/packed-refs (a hook edit shows in the PR
+diff); an edit of .claude/settings*.json by a tool other than Edit and Write, or by a script; a
+path built at run time (`$(git rev-parse --git-common-dir)/refs`); a path relative to a folder
+entered first (`cd .git/refs/notes && cp mine ai-review`, `git -C .claude checkout settings.json`)
+or a copy into a parent folder (`cp -r /tmp/refs .git/`), since the guard does not track the
+working folder or what a folder copy lands on. The main session writes the
+reviewer's prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is
+built from the same local note, so it makes the verdict visible and required on the PR; it is not
+an independent check.
 
 Tests: python3 .claude/hooks/test_guard.py (run by scripts/verify.sh).
 """
@@ -81,8 +91,10 @@ RECORD_DENIED = ("Only the reviewer subagent records a review verdict. Run the `
                  "it reviews HEAD and records PASS or FAIL itself.")
 PM_HEADS = {"pnpm", "npm", "yarn", "bun"}
 PM_RUNNERS = {"exec", "dlx", "x"}
-# Paths that turn the pre-push check off when edited from the shell
-HOOK_PATHS = (".githooks", ".git/config", ".git/hooks", ".git/worktrees")
+# Paths that turn the pre-push check off when edited from the shell: the hook, the git config,
+# the refs that hold the verdict note, and the Claude settings that can switch this guard off
+HOOK_PATHS = (".githooks", ".git/config", ".git/hooks", ".git/worktrees", ".git/refs", ".git/packed-refs",
+              ".claude/settings")
 # git builtins never resolve to an alias (git does not let an alias shadow them)
 GIT_BUILTINS = {
     "add", "am", "apply", "bisect", "blame", "branch", "checkout", "cherry-pick", "clean", "clone", "commit",
@@ -92,7 +104,7 @@ GIT_BUILTINS = {
     "update-ref", "worktree", "symbolic-ref", "cat-file", "for-each-ref", "help", "version",
 }
 ALIAS_RISK = re.compile(r"push|notes|update-ref|ai-review|hookspath|!", re.IGNORECASE)
-HOOK_WRITERS = {"rm", "mv", "cp", "chmod", "ln", "tee", "truncate", "unlink", "install", "perl", "dd"}
+HOOK_WRITERS = {"rm", "mv", "cp", "chmod", "ln", "tee", "truncate", "unlink", "install", "perl", "dd", "rsync"}
 # Commands that run another command given as arguments: the guard cannot parse what they run
 EXEC_HEADS = {"xargs", "find", "bash", "sh", "zsh", "dash", "eval", "parallel", "watch", "script", "su", "fd"}
 # Prefixes dropped before the real command; value: options of theirs that take a value
@@ -146,7 +158,7 @@ def strip_prefix(tokens: list[str]) -> list[str]:
                 i += 2 if tokens[i] in PM_VALUE_OPTS else 1
             if i >= len(tokens) or tokens[i] not in PM_RUNNERS:
                 break
-            tokens = [t for t in tokens[i + 1:]]
+            tokens = tokens[i + 1:]
             while tokens and tokens[0].startswith("-"):
                 tokens = tokens[1:]
             continue
@@ -404,11 +416,14 @@ def check_segment(tokens: list[str], branch: str | None, cwd: str | None = None,
     writes = head in HOOK_WRITERS or (head == "sed" and any(t.startswith(("-i", "--in-place")) for t in tokens))
     if writes and any(hook_path(t) for t in tokens[1:]) or any(
             t in {">", ">>", ">|"} and hook_path(nxt) for t, nxt in zip(tokens, tokens[1:])):
-        found.append(("deny", ".githooks/ and .git/config decide whether the pre-push review check runs. "
-                              "Change .githooks/ in an issue and PR; leave .git/config to git commands."))
+        found.append(("deny", ".githooks/, .git/config, .git/refs and .claude/settings*.json decide whether the review "
+                              "check runs. Change .githooks/ in an issue and PR; leave .git/ to git commands; "
+                              "the user edits .claude/settings*.json."))
     git_sub, _ = git_subcommand(tokens)
     if git_sub in {"rm", "mv", "restore", "checkout", "update-index"} and any(hook_path(t) for t in tokens):
-        found.append(("deny", ".githooks/ holds the pre-push review check. Change it in an issue and PR, not from the shell."))
+        found.append(("deny", ".githooks/, .git/config, .git/hooks, .git/refs and .claude/settings*.json decide "
+                              "whether the review check runs. "
+                              "Change .githooks/ in an issue and PR; the user edits .claude/settings*.json."))
     if git_sub == "config" and ({"--remove-section", "--rename-section"} & set(tokens)) and any(
             t.lower() == "core" or t.lower().startswith("core.") for t in tokens):
         found.append(("deny", "Removing the [core] section turns the pre-push review check off."))
