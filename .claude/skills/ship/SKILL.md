@@ -19,7 +19,7 @@ git log origin/main..HEAD --oneline
 ```
 
 - On `main`, or the branch is not `<type>/<KEY>-<slug>`: stop and offer `/work-on`.
-- KEY comes from the branch (or the argument; they must match).
+- KEY comes from the branch. If an argument is given and differs from the branch's KEY: stop and ask which is right.
 - Uncommitted changes: list the files and propose one commit `<KEY>: <what changed>`. Do not pick files yourself if some look unrelated; ask. Commit only after the user's yes. Never commit `.env` files.
 - No commits ahead of `origin/main`: nothing to ship; stop.
 
@@ -31,12 +31,16 @@ scripts/verify.sh
 
 Red: show the failing part and stop. The user decides whether you fix it now.
 
+Every fix, here or after the review, follows the same loop so that what is reviewed is what gets pushed: fix, commit with the `<KEY>: ` prefix, then run `/ship` again from step 1.
+
 ## 3. Review
 
 Run the `reviewer` subagent with the issue number and the worktree path. Keep its full report.
 
-- `VERDICT: FAIL`: show the Blockers with their scenarios and stop. When the user asks you to fix them: fix, commit with the `<KEY>: ` prefix, and run `/ship` again (it reviews the new state).
-- `VERDICT: PASS`: show Should fix and Nit items and ask, for each group: fix now (then back to step 2) or leave them. Offer `/new-issue` for anything left that is worth doing later.
+- `VERDICT: FAIL`: show the Blockers with their scenarios and stop. When the user asks you to fix them, use the fix loop above.
+- `VERDICT: PASS`: show Should fix and Nit items and ask, for each group: fix now (fix loop above; the new commits are reviewed again) or leave them. Offer `/new-issue` for anything left that is worth doing later.
+- Anything else (the agent errors or times out, or the report's last line is not exactly `VERDICT: PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows step 4.
+- If the `reviewer` agent is not available in this session (agents load when a session starts), run a general subagent told to follow `.claude/agents/reviewer.md` exactly.
 
 ## 4. Draft the PR, wait for yes
 
@@ -44,7 +48,7 @@ Run the `reviewer` subagent with the issue number and the worktree path. Keep it
 gh issue view <KEY> --json title,labels,milestone
 ```
 
-Title: `<KEY>: <issue title>` (shorten past about 70 characters). Body, in this order (same sections as `.github/pull_request_template.md`):
+Title: `<KEY>: <issue title>`, at most about 70 characters (shorten the issue title if needed). Body, in this order (same sections as `.github/pull_request_template.md`):
 
 ```markdown
 Closes #<KEY>
@@ -67,7 +71,7 @@ VERDICT: PASS — <open Should fix / Nit items, or "no open items">
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 ```
 
-Show title, label, milestone (copied from the issue) and the body. Wait for the user's yes or corrections.
+Show title, labels, milestone (all copied from the issue) and the body. Wait for the user's yes or corrections.
 
 ## 5. Push and open the PR
 
@@ -75,15 +79,15 @@ The guard hook asks before each of these; that is the code-level lock on top of 
 
 ```bash
 git push -u origin <branch>
-gh pr create --base main --title "<title>" --label <label> --milestone <milestone> --body-file - <<'EOF'
+gh pr create --base main --title "<title>" --label <label1> --label <label2> --milestone <milestone> --body-file - <<'EOF'
 <body>
 EOF
 ```
 
-Omit `--label` / `--milestone` when the issue has none.
+One `--label` per issue label (all of them); omit `--label` / `--milestone` when the issue has none.
 
 ## 6. After
 
-- Give the PR link. In the Claude desktop app, bind the PR to the session (`mcp__ccd_pr__bind_pr` if the PR bar did not pick it up) so CI status shows.
+- Give the PR link. In the Claude desktop app, check the PR is bound to the session so CI status shows: `mcp__ccd_pr__get_status`, and `mcp__ccd_pr__bind_pr` with the PR URL if it is not (load both with ToolSearch if they are deferred).
 - Never merge; the user merges on GitHub.
 - After the merge: sync `main` in the main checkout (`git switch main && git pull --ff-only`) and remove the worktree with `scripts/worktree.sh remove <KEY>`.

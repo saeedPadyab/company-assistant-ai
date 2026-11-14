@@ -56,5 +56,5 @@ Run from the repo root.
 
 ## Pull requests
 - Open a PR only through `/ship`: committed work, `scripts/verify.sh` green, reviewer PASS, and the user's yes on the PR text.
-- Title `<KEY>: <issue title>`; body follows `.github/pull_request_template.md` (Closes, what changes, how tested, review, not tested); label and milestone copied from the issue.
+- Title `<KEY>: <issue title>`, at most about 70 characters; body follows `.github/pull_request_template.md` (Closes, what changes, how tested, review, not tested); all labels and the milestone copied from the issue.
 - Claude never merges. After the user merges: sync `main`, then `scripts/worktree.sh remove <KEY>`.

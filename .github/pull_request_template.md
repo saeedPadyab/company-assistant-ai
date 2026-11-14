@@ -1,6 +1,6 @@
 Closes #<issue>
 
-<!-- One or two sentences: what problem this solves. Title: "<issue>: <issue title>". -->
+<!-- One or two sentences: what problem this solves. Title: "<issue>: <issue title>", at most about 70 characters. -->
 
 ## What changes
 -
