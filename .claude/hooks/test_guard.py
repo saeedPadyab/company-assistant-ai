@@ -114,6 +114,13 @@ class ReviewGate(GuardTest):
             "pnpm git -c core.hooksPath=/dev/null push", "pnpm --filter server git push --no-verify",
             "git config --remove-section core", "git config --rename-section core x",
             "git rm .githooks/pre-push", "git mv .githooks/pre-push x", "git restore --source=HEAD~1 .githooks",
+            # inside quotes, $(...) and backticks
+            'out="$(git push --no-verify origin HEAD 2>&1)"; echo "$out"',
+            'echo "pushed: `git push --no-verify`"',
+            "git config remove-section core", "git config rename-section core x",
+            "git --config-env=core.hooksPath=V push", "git config include.path /tmp/x",
+            # the cost of the raw scan: an inline message that names it
+            "git commit -m '3: document core.hooksPath'",
         ]])
 
     def test_push_is_denied_when_the_hook_is_off(self) -> None:
@@ -125,7 +132,7 @@ class ReviewGate(GuardTest):
         self.check([("git push", "deny")])
         self.check([(c, "allow") for c in [
             "git config --get core.hooksPath", "cat .githooks/pre-push",
-            "git commit -m '3: document core.hooksPath'",
+            "git commit -F /tmp/msg.txt",  # text that names the dangerous words goes in a file
             "git config --get-regexp alias", "cat .git/config",
         ]])
 
@@ -230,6 +237,10 @@ class WhoRecords(GuardTest):
         "npx git notes --ref=ai-review add -m x",
         "pnpm exec git notes --ref=ai-review add -m x",
         "pnpm git notes --ref ai-review add -f -m 'VERDICT: PASS' HEAD",
+        'echo "$(git notes --ref=ai-review add -f -m "VERDICT: PASS" HEAD)"',
+        'msg="$(git notes --ref=ai-review add -f -m PASS HEAD 2>&1)"',
+        "echo `git notes --ref=ai-review add -m x`",
+        "git notes --re=ai-review add -m 'VERDICT: PASS' HEAD",
     ]
     READS = [
         "scripts/review-status.sh get",

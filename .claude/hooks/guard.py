@@ -5,38 +5,39 @@ Claude Code pipes the tool call as JSON on stdin. This script:
   - exit 2 + a reason on stderr  -> the command is blocked, Claude sees the reason
   - prints a JSON "ask" decision  -> the user is asked, whatever the permission rules say
   - exit 0 with no output         -> normal permission flow
+If this script crashes, the command is denied.
 
-Rules work on the parsed command, so word order and flags (`pnpm --filter server add x`,
-`git push origin HEAD:main`) do not get around them. It only sees the command text: a script
-that pushes on its own is out of reach (that is the sandbox's job).
+Two layers:
+  1. Raw text. Three things are dangerous wherever they appear, inside quotes, `$(...)` or
+     backticks included, so they are matched on the whole command text before any parsing:
+     `--no-veri...` (skips the pre-push hook), hooksPath / include.path / [core] removal (turns
+     it off), and, outside the reviewer, a write to the verdict ref (`notes ... add|append|...` or
+     `update-ref` with `ai-review`, `review-status.sh record`). The cost: those words cannot appear
+     in an inline commit message or PR body; write such text to a file and pass it with -F.
+  2. Parsed command. The rest work on the parsed command, so word order and flags
+     (`pnpm --filter server add x`, `git push origin HEAD:main`) do not get around them.
+     Subshells and groups, shell keywords (`if`, `then`), wrappers (`timeout 60`, `nice`,
+     `sudo -u x`, `env X=1`) and package runners (`pnpm exec`, `npx`) are split off or stripped;
+     in a command that is not git itself (`pnpm git push`), every later `git` word is checked as
+     a git command. `xargs`, `find -exec`, `bash -c` and `eval` cannot be parsed, so a push inside
+     them is denied. Git aliases are denied where they are set, and an existing alias that may
+     push, write notes or change hooks is denied where it is used.
 
-Subshells and groups (`(cd x && git push)`, `{ ...; }`), shell keywords (`if`, `then`, `do`),
-wrappers (`timeout 60`, `nice`, `nohup`, `sudo -u x`, `env X=1`) and package runners (`pnpm exec`,
-`pnpm dlx`, `npx`) are split off or stripped first, and in any command that is not git itself
-(`pnpm git push`, `sudo -u me git ...`) every later `git` word is checked as a git command too. Git aliases are denied where they are set
-(`git -c alias.x=...`, `git config alias.x`), and an existing alias that may push, write notes or
-change hooks is denied where it is used.
+Review gate (issue #3): the lock on pushes is git's own pre-push hook (.githooks/pre-push), which
+git runs however the push was started. This guard denies what would switch it off (above, plus
+shell or git writes to .githooks/ and .git/config), checks before any push that git will run it,
+and gives an early, readable deny for a push without the reviewer's PASS note. Only the
+`reviewer` subagent (hook input `agent_type`) may write the note. `review-status.sh publish`
+writes to GitHub, so it asks.
 
 Threat model (issue #3): in scope is Claude pushing or recording a verdict by mistake or as a
-shortcut, in any ordinary way of writing the command. Out of scope, closed by the sandbox (roadmap
-step 12): deliberately working around the gate, listed under "Known limits" below. Commands that run other
-commands (`xargs`, `find -exec`, `bash -c`, `eval`) cannot be parsed, so a `git push` or a write
-to the verdict ref inside them is denied. If this script crashes, the command is denied.
-
-Review gate: the lock on pushes is git's own pre-push hook (.githooks/pre-push), which git runs
-however the push was started. This guard adds an early, readable deny for a plain `git push` without
-the reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh), and denies what would
-switch the hook off: `--no-verify`, any change to core.hooksPath or removal of [core], and shell or
-git writes to .githooks/ or .git/config; before any push it checks that git will run the hook. Only the
-`reviewer` subagent (hook input `agent_type`) may write that ref: outside it, a git command that
-names the ref (refs/notes/ai-review, --ref ai-review, notes.* or core.notesRef config) is denied except reads, and
-so is any VAR=...ai-review assignment. `review-status.sh publish` writes to GitHub, so it asks.
-Known limits (out of scope above): the guard sees only the command text, so a script, Makefile
-target or inline interpreter (`python3 -c`, `node -e`) that writes the note, runs
-`git push --no-verify` or edits .git/, and a variable built in pieces, are not seen; neither is an
-edit of .githooks/pre-push or .git/config with an editor tool (a hook edit shows in the PR diff). The main session writes the reviewer's
-prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same
-local note, so it is not an independent check; it makes the verdict visible and required on the PR.
+shortcut, in any ordinary way of writing the command. Out of scope, closed by the sandbox
+(roadmap step 12), and so the known limits: a script, Makefile target or inline interpreter
+(`python3 -c`, `node -e`) that pushes with --no-verify, writes the note or edits .git/; words
+built from pieces (`R=ai; $R-review`, `--no-$V`); an editor-tool edit of .githooks/pre-push or
+.git/config (a hook edit shows in the PR diff). The main session writes the reviewer's prompt, so
+it could talk the reviewer into a PASS. The GitHub `ai-review` status is built from the same local
+note, so it makes the verdict visible and required on the PR; it is not an independent check.
 
 Tests: python3 .claude/hooks/test_guard.py (run by scripts/verify.sh).
 """
@@ -247,7 +248,8 @@ def pre_push_off(cwd: str | None) -> str | None:
         return "core.hooksPath is not set"
     hook = os.path.join(top, os.path.expanduser(hooks), "pre-push")
     if not (os.path.isfile(hook) and os.access(hook, os.X_OK)):
-        return f"{hook} is missing or not executable"
+        return (f"{hook} is missing or not executable; on a branch cut before the hook existed, "
+                "rebase on origin/main")
     return None
 
 
@@ -470,6 +472,26 @@ def git_dir_option(tokens: list[str]) -> str | None:
     return None
 
 
+NOTES_WRITE = re.compile(r"\bnotes\b.*\b(add|append|edit|copy|remove|merge|prune)\b|\bupdate-ref\b|notesref", re.S | re.I)
+
+
+def scan_raw(command: str, agent_type: str | None) -> list[tuple[str, str]]:
+    """Layer 1: the dangerous words anywhere in the text, quotes and $(...) included."""
+    found = []
+    if "--no-veri" in command:
+        found.append(("deny", "No --no-verify, anywhere in a command: it skips the pre-push review check. "
+                              "Get the reviewer's PASS, then push. (Text that mentions it goes in a file: -F.)"))
+    lower = command.lower()
+    reads_hooks = re.fullmatch(r"\s*git\s+config\s+(--get|get)\s+core\.hookspath\s*", lower)
+    if (("hookspath" in lower and not reads_hooks) or "include.path" in lower or "includeif" in lower
+            or re.search(r"(remove|rename)-section\s+['\"]?core\b", lower)):
+        found.append(("deny", "core.hooksPath, include.path and the [core] section decide whether the pre-push "
+                              "review check runs; they are not changed from Claude. (Text that mentions them goes in a file: -F.)"))
+    if agent_type != REVIEWER_AGENT and REVIEW_NOTES_REF in command and NOTES_WRITE.search(command):
+        found.append(("deny", RECORD_DENIED + " (Text that mentions the verdict ref with notes or update-ref goes in a file: -F.)"))
+    return found
+
+
 def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: str | None = None,
            verdict_of=review_verdict) -> tuple[str, str] | None:
     """Follows `cd <dir>` and `git -C <dir>` so a commit in a worktree is checked against that worktree's branch."""
@@ -481,6 +503,7 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
             cache[path] = branch_of(path)
         return cache[path]
 
+    results.extend(scan_raw(command, agent_type))
     # env assignments are stripped from segments, so check them on the raw text:
     # GIT_NOTES_REF=refs/notes/ai-review, GIT_CONFIG_VALUE_0=..., or R=ai-review used later as $R
     if agent_type != REVIEWER_AGENT and re.search(
