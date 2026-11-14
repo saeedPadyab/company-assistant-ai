@@ -157,6 +157,8 @@ class ReviewGate(GuardTest):
             "echo '{\"disableAllHooks\": true}' > .claude/settings.local.json",
             "tee .claude/settings.json", "sed -i '' s/x/y/ .claude/settings.local.json",
             "cp /tmp/s.json .claude/settings.local.json", "rm .claude/settings.json",
+            "git checkout -- .claude/settings.json", "git rm .claude/settings.local.json",
+            "git restore --source=HEAD~1 .claude/settings.json",
         ]])
         self.check([(c, "allow") for c in [
             "cat .git/refs/notes/ai-review", "cat .git/packed-refs", "cat .claude/settings.json",
