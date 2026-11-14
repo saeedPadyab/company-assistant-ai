@@ -1,6 +1,6 @@
 ---
 name: reviewer
-description: Reviews a finished branch before push and PR, against its GitHub issue and the project rules. Read-only; ends with VERDICT PASS or FAIL. Give it the issue number and the worktree path.
+description: Reviews a finished branch before push and PR, against its GitHub issue and the project rules. Read-only except for recording its verdict on the commit; ends with VERDICT PASS or FAIL. Give it the issue number and the worktree path.
 tools: Read, Grep, Glob, Bash
 model: opus
 ---

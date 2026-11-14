@@ -29,7 +29,7 @@ cmd_record() {
   local verdict="${1:-}" summary="${2:-}"
   [[ "$verdict" =~ ^(PASS|FAIL)$ ]] || die "usage: record PASS|FAIL \"<summary>\""
   [ -n "$summary" ] || die "a one-line summary is required"
-  [ -z "$(git status --porcelain)" ] || die "uncommitted changes: the verdict must be for a commit, so commit or stash first"
+  [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes: the verdict must be for a commit, so commit or stash first"
   git notes --ref="$NOTES_REF" add -f -m "VERDICT: $verdict" -m "$summary" -m "reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" HEAD
   echo "recorded $verdict on $(git rev-parse --short HEAD)"
 }

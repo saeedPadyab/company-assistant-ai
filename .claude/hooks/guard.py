@@ -10,9 +10,14 @@ Rules work on the parsed command, so word order and flags (`pnpm --filter server
 `git push origin HEAD:main`) do not get around them. It only sees the command text: a script
 that pushes on its own is out of reach (that is the sandbox's job).
 
-Review gate: `git push` is denied unless each pushed commit has the reviewer's PASS note
-(refs/notes/ai-review, scripts/review-status.sh), and only the `reviewer` subagent (hook input
-`agent_type`) may write that note.
+Review gate: `git push` is denied unless the tip of each pushed ref (HEAD when no refspec) has the
+reviewer's PASS note (refs/notes/ai-review, scripts/review-status.sh). Only the `reviewer` subagent
+(hook input `agent_type`) may touch that ref: outside it, any git command naming `ai-review` is
+denied except reads (log, show, notes show/list), and so is GIT_NOTES_REF / GIT_CONFIG_* pointing
+at it. Known limits (text only, as above): a script or `bash -c '...'` that writes the note, or a
+file edit under .git/, is not seen. The GitHub `ai-review` status is the second lock.
+
+Tests: python3 .claude/hooks/test_guard.py (run by scripts/verify.sh).
 """
 
 from __future__ import annotations
@@ -45,7 +50,11 @@ GH_API_FIELD_OPTS = {"-f", "-F", "--field", "--raw-field", "--input"}
 # Review gate: the reviewer's verdict is a git note on the commit (scripts/review-status.sh)
 REVIEW_NOTES_REF = "ai-review"
 REVIEWER_AGENT = "reviewer"
-NOTES_WRITE_ACTIONS = {"add", "append", "edit", "copy", "remove", "merge", "prune"}
+NOTES_ACTIONS = {"add", "append", "edit", "copy", "remove", "merge", "prune", "show", "list", "get-ref"}
+NOTES_READ_ACTIONS = {"show", "list", "get-ref"}
+GIT_READ_SUBS = {"log", "show", "rev-parse", "status", "diff"}
+RECORD_DENIED = ("Only the reviewer subagent records a review verdict. Run the `reviewer` agent on this branch; "
+                 "it reviews HEAD and records PASS or FAIL itself.")
 
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n"}
@@ -130,18 +139,18 @@ def check_review_record(tokens: list[str], agent_type: str | None) -> tuple[str,
     """Only the reviewer subagent writes verdicts (refs/notes/ai-review)."""
     if agent_type == REVIEWER_AGENT:
         return None
-    reason = ("Only the reviewer subagent records a review verdict. Run the `reviewer` agent on this branch; "
-              "it reviews HEAD and records PASS or FAIL itself.")
     for i, tok in enumerate(tokens[:-1]):
         if os.path.basename(tok) == "review-status.sh" and tokens[i + 1] == "record":
-            return "deny", reason
+            return "deny", RECORD_DENIED
     sub, args = git_subcommand(tokens)
-    touches_ref = any(REVIEW_NOTES_REF in t for t in tokens[1:])
-    if sub == "notes" and touches_ref and set(args) & NOTES_WRITE_ACTIONS:
-        return "deny", reason
-    if sub in {"update-ref", "fetch", "pull"} and touches_ref:
-        return "deny", reason
-    return None
+    if sub is None or not any(REVIEW_NOTES_REF in t for t in tokens[1:]):
+        return None
+    # git names the ref: allow reads, deny everything else (notes add, update-ref, config notes.rewriteRef, -c ...)
+    if sub in GIT_READ_SUBS and not any(t == "-c" for t in tokens):
+        return None
+    if sub == "notes" and next((a for a in args if a in NOTES_ACTIONS), "list") in NOTES_READ_ACTIONS:
+        return None
+    return "deny", RECORD_DENIED
 
 
 def check_push(args: list[str], branch: str | None, cwd: str | None = None,
@@ -299,6 +308,9 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
             cache[path] = branch_of(path)
         return cache[path]
 
+    # env assignments are stripped from segments, so check them on the raw text
+    if agent_type != REVIEWER_AGENT and REVIEW_NOTES_REF in command and re.search(r"\bGIT_(NOTES_REF|CONFIG_)", command):
+        results.append(("deny", RECORD_DENIED))
     for tokens in segments_of(command):
         if tokens[0] == "cd" and len(tokens) > 1:
             cwd = os.path.join(cwd or os.getcwd(), os.path.expanduser(tokens[1]))
