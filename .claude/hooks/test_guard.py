@@ -359,6 +359,12 @@ class SandboxExcludedAlone(GuardTest):
             "git status && git push", "ls; git fetch origin", "git pull || true",
             "docker compose up -d && pnpm test", "ls && scripts/worktree.sh setup",
             "git status && ./scripts/review-status.sh get",
+            # command substitution inside double quotes, and an unquoted heredoc that substitutes
+            'gh pr create --title x --body "$(cat notes.md)"', 'gh issue comment 1 --body "see `git log -1`"',
+            "gh pr create --title x --body \"$(cat <<'EOF'\nbody\nEOF\n)\"",
+            "gh pr create --body-file - <<EOF\n$(git log -1)\nEOF",
+            # `<<` inside quotes is text, not a heredoc: the lines after it are still commands
+            'echo "<<EOF"\ngit status && gh issue view 1', "echo '<<EOF'\ngh issue view 1",
         ]])
         self.check([("git status; scripts/review-status.sh record PASS x", "deny")], agent_type="reviewer")
 
@@ -369,6 +375,10 @@ class SandboxExcludedAlone(GuardTest):
             ('cd "/a b" && gh pr view 1 --json state', "allow"), ("scripts/review-status.sh get", "allow"),
             ("git status && git log", "allow"), ("cd . && git push", "ask"), ("git push", "ask"),
             ("gh pr create --base main --title x --body-file - <<'EOF'\nfirst line\n- second; line\nEOF", "ask"),
+            ("gh pr create --body-file - <<'EOF'\nuses `$(x)` and `y`\nEOF", "ask"),  # quoted heredoc: literal
+            ("gh pr view 1 --json title --jq '.title | \"$(x)\"'", "allow"),  # single quotes: literal
+            # quoted code that mentions gh and `<<EOF` is one command, not a chain
+            ("cd /x && python3 -c '\nx = \"a; gh issue view 1\"\ny = \"<<EOF\"\n'", "allow"),
         ])
         self.check([(f"cd {self.repo} && scripts/review-status.sh record PASS ok", "allow")], agent_type="reviewer")
 

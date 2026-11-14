@@ -538,17 +538,47 @@ def scan_raw(command: str, agent_type: str | None) -> list[tuple[str, str]]:
     return found
 
 
-def without_heredoc_bodies(command: str) -> str:
-    """The command without the lines a heredoc (`<<'EOF'` ... `EOF`) feeds in: they are data, not commands."""
-    out, pending = [], []
-    for line in command.split("\n"):
-        if pending:
-            if line.strip() == pending[0]:
-                pending.pop(0)
+def heredocs_and_substitution(command: str) -> tuple[str, bool]:
+    """(the command without heredoc bodies, whether it runs a command substitution).
+
+    A heredoc body (`<<'EOF'` ... `EOF`) is data, not commands, so it is dropped. `$(` and backticks run a
+    command outside single quotes and quoted heredoc bodies, inside double quotes too, which shlex cannot tell.
+    `<<` counts only outside quotes, so text that mentions it in a string does not start a heredoc."""
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []  # (delimiter, body is quoted)
+    subst, quote, i, n = False, None, 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\n" and quote is None and pending:
+            out.append(c)
+            lines, end = command[i + 1:].split("\n"), i + 1
+            for delim, quoted in pending:
+                body: list[str] = []
+                while lines and lines[0].strip() != delim:
+                    body.append(lines.pop(0))
+                if lines:
+                    lines.pop(0)
+                end += sum(len(b) + 1 for b in body) + len(delim) + 1
+                subst |= not quoted and any("$(" in b or "`" in b for b in body)
+            pending, i = [], end
             continue
-        out.append(line)
-        pending.extend(m.group(2) for m in HEREDOC.finditer(line))
-    return "\n".join(out)
+        if c == "\\" and quote != "'":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c in "'\"" and quote is None:
+            quote = c
+        elif c == '"' and quote == '"':
+            quote = None
+        elif c == "`" or command.startswith("$(", i):
+            subst = True
+        elif quote is None and (m := HEREDOC.match(command, i)):
+            pending.append((m.group(2), bool(m.group(1))))
+        out.append(c)
+        i += 1
+    return "".join(out), subst
 
 
 def excluded_name(tokens: list[str]) -> str | None:
@@ -569,14 +599,15 @@ def excluded_name(tokens: list[str]) -> str | None:
 def check_alone(command: str) -> tuple[str, str] | None:
     """Deny an excluded command chained to anything but a leading `cd <dir> &&`: the sandbox matches the whole
     call's text, so such a call stays sandboxed and fails later on the network or on .git/refs/notes."""
-    segments = segments_of(without_heredoc_bodies(command))
+    text, subst = heredocs_and_substitution(command)
+    segments = segments_of(text)
     names = [n for s in segments if (n := excluded_name(s))]
     if not names:
         return None
     rest = segments
     if len(segments) > 1 and segments[0][0] == "cd" and len(segments[0]) == 2 and LEADING_CD.match(command):
         rest = segments[1:]
-    if len(rest) <= 1:
+    if len(rest) <= 1 and not subst:
         return None
     return "deny", (f"Run `{names[0]}` on its own, as a separate Bash call (`cd <dir> && {names[0]} ...` at most). "
                     "Chained with other commands (`&&`, `;`, `|`, `$(...)`, a second line) the whole call stays in "
