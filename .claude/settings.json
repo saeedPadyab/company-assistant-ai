@@ -48,7 +48,52 @@
       "Edit(**/.claude/settings.json)",
       "Edit(**/.claude/settings.local.json)",
       "Write(**/.claude/settings.json)",
-      "Write(**/.claude/settings.local.json)"
+      "Write(**/.claude/settings.local.json)",
+      "Edit(**/.git/**)",
+      "Write(**/.git/**)",
+      "Edit(**/.githooks/**)",
+      "Write(**/.githooks/**)",
+      "Edit(//**/.git/config)",
+      "Write(//**/.git/config)",
+      "Edit(//**/.git/hooks/**)",
+      "Write(//**/.git/hooks/**)",
+      "Edit(//**/.git/refs/notes/**)",
+      "Write(//**/.git/refs/notes/**)",
+      "Edit(//**/.git/packed-refs)",
+      "Write(//**/.git/packed-refs)"
+    ]
+  },
+  "sandbox": {
+    "enabled": true,
+    "allowUnsandboxedCommands": false,
+    "network": {
+      "allowedDomains": [
+        "registry.npmjs.org"
+      ],
+      "allowLocalBinding": true
+    },
+    "filesystem": {
+      "allowRead": [
+        "apps/server/.env"
+      ],
+      "allowWrite": [
+        "~/Library/pnpm/store"
+      ],
+      "denyWrite": [
+        ".githooks/",
+        ".git/config",
+        ".git/refs/notes/",
+        ".git/packed-refs"
+      ]
+    },
+    "excludedCommands": [
+      "git push *",
+      "git fetch *",
+      "git pull *",
+      "gh *",
+      "docker compose *",
+      "scripts/worktree.sh *",
+      "scripts/review-status.sh *"
     ]
   }
 }

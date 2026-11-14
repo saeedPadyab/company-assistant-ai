@@ -34,7 +34,11 @@ class GuardTest(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, self.repo, True)
-        self.git("init", "-q", "-b", "feat/1-x")
+        # The git dir sits outside the repo, as in a worktree. A `.git` folder would not work under the
+        # Bash sandbox, which denies writes to `.git/config`, `.git/hooks/` and `.git/refs/notes/` anywhere.
+        gitdir = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, gitdir, True)
+        self.git("init", "-q", "-b", "feat/1-x", f"--separate-git-dir={gitdir}")
         self.git("config", "user.email", "test@example.com")
         self.git("config", "user.name", "test")
         os.mkdir(os.path.join(self.repo, ".githooks"))

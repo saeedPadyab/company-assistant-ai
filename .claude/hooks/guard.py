@@ -37,18 +37,28 @@ Only the `reviewer` subagent (hook input `agent_type`) may write the note.
 `review-status.sh publish` writes to GitHub, so it asks.
 
 Threat model (issue #3): in scope is Claude pushing or recording a verdict by mistake or as a
-shortcut, in any ordinary way of writing the command. Out of scope, closed by the sandbox
-(roadmap step 12), and so the known limits: a script, Makefile target or inline interpreter
-(`python3 -c`, `node -e`) that pushes with --no-verify, writes the note or edits .git/; words
-built from pieces (`R=ai; $R-review`, `--no-$V`, quotes inside a word: `ai-'review'`) and a
-command name held in a variable (`S=scripts/review-status.sh; $S record`); an editor-tool edit of
-.githooks/pre-push, .git/config, .git/refs/ or .git/packed-refs (a hook edit shows in the PR
-diff); an edit of .claude/settings*.json by a tool other than Edit and Write, or by a script; a
-path built at run time (`$(git rev-parse --git-common-dir)/refs`); a path relative to a folder
-entered first (`cd .git/refs/notes && cp mine ai-review`, `git -C .claude checkout settings.json`)
-or a copy into a parent folder (`cp -r /tmp/refs .git/`), since the guard does not track the
-working folder or what a folder copy lands on. The main session writes the
-reviewer's prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is
+shortcut, in any ordinary way of writing the command. This guard reads only command text, so it
+cannot see a script, Makefile target or inline interpreter (`python3 -c`, `node -e`), words built
+from pieces (`R=ai; $R-review`, `--no-$V`, `ai-'review'`), a command name in a variable
+(`S=scripts/review-status.sh; $S record`), a path built at run time
+(`$(git rev-parse --git-common-dir)/refs`), a path relative to a folder entered first
+(`cd .git/refs/notes && cp mine ai-review`) or a copy into a parent folder (`cp -r /tmp/refs .git/`).
+
+Closed by the Bash sandbox (issue #9, `sandbox` in .claude/settings.json; see CLAUDE.md): every
+sandboxed command, however it is written, cannot write .githooks/, .git/config, .git/hooks/,
+.git/refs/notes/ or .git/packed-refs (also in a worktree's shared git dir, through the
+`//**/.git/...` deny rules), .claude settings, hooks and skills, or anything outside the project and
+$TMPDIR. So the cases above can no longer write the note, the hooks or git config, or edit
+.claude/settings*.json. The Edit and Write tools run outside the sandbox and are denied on .git and
+.githooks paths in .claude/settings.json.
+
+Still open, the known limits: `excludedCommands` (git push/fetch/pull, gh, docker compose,
+scripts/worktree.sh, scripts/review-status.sh) run unsandboxed and are matched on text, so for them
+this guard is the only check (a compose file edited in the repo runs unsandboxed through
+`docker compose`); a script that runs `git push --no-verify` is sandboxed but may reach GitHub,
+since in auto mode unlisted hosts were reachable (`network.strictAllowlist` lives in user or
+managed settings, not here); hooks and MCP servers run outside the sandbox. The main session writes
+the reviewer's prompt, so it could talk the reviewer into a PASS. The GitHub `ai-review` status is
 built from the same local note, so it makes the verdict visible and required on the PR; it is not
 an independent check.
 
