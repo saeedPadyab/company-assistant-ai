@@ -12,10 +12,23 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify_on_stop.py",
+            "timeout": 600
+          }
+        ]
+      }
     ]
   },
   "permissions": {
     "allow": [
+      "Bash(scripts/verify.sh)",
+      "Bash(scripts/verify.sh --full)",
       "Bash(pnpm typecheck)",
       "Bash(pnpm lint)",
       "Bash(pnpm test)",
