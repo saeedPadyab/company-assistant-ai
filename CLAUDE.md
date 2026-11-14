@@ -53,3 +53,8 @@ Run from the repo root.
 - `VERDICT: FAIL`: fix the Blockers, commit, run the reviewer again on the new commits. Never argue a Blocker away or edit the review.
 - Should fix and Nit are not fixed automatically: list them for the user, who decides now or in a follow-up issue.
 - Put the verdict and any open Should fix items in the PR description.
+
+## Pull requests
+- Open a PR only through `/ship`: committed work, `scripts/verify.sh` green, reviewer PASS, and the user's yes on the PR text.
+- Title `<KEY>: <issue title>`; body follows `.github/pull_request_template.md` (Closes, what changes, how tested, review, not tested); label and milestone copied from the issue.
+- Claude never merges. After the user merges: sync `main`, then `scripts/worktree.sh remove <KEY>`.
