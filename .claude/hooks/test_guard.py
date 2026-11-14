@@ -347,6 +347,38 @@ class GitHubWrites(GuardTest):
         ]])
 
 
+class SandboxExcludedAlone(GuardTest):
+    """Issue #13: excludedCommands leave the sandbox only as the whole call, after at most `cd <dir> &&`."""
+
+    def test_chained_forms_are_denied(self) -> None:
+        self.note("PASS")  # so a chained push is denied by this rule, not by the review gate
+        self.check([(c, "deny") for c in [
+            "git status && gh issue view 1", "git log; scripts/review-status.sh get", "gh pr view 1 | cat",
+            "gh issue view 1 && git status", "gh issue view 1\ngit status", "out=$(gh pr view 1); echo $out",
+            "cd /x && git status && gh issue view 1", "cd /x; ls && gh issue view 1",
+            "git status && git push", "ls; git fetch origin", "git pull || true",
+            "docker compose up -d && pnpm test", "ls && scripts/worktree.sh setup",
+            "git status && ./scripts/review-status.sh get",
+        ]])
+        self.check([("git status; scripts/review-status.sh record PASS x", "deny")], agent_type="reviewer")
+
+    def test_alone_or_after_cd_passes_as_before(self) -> None:
+        self.note("PASS")
+        self.check([
+            ("gh issue view 1", "allow"), ("cd /x && gh issue view 1", "allow"),
+            ('cd "/a b" && gh pr view 1 --json state', "allow"), ("scripts/review-status.sh get", "allow"),
+            ("git status && git log", "allow"), ("cd . && git push", "ask"), ("git push", "ask"),
+            ("gh pr create --base main --title x --body-file - <<'EOF'\nfirst line\n- second; line\nEOF", "ask"),
+        ])
+        self.check([(f"cd {self.repo} && scripts/review-status.sh record PASS ok", "allow")], agent_type="reviewer")
+
+    def test_deny_says_run_it_on_its_own(self) -> None:
+        payload = {"cwd": self.repo, "tool_input": {"command": "git status && gh issue view 11"}}
+        p = subprocess.run([sys.executable, "-B", GUARD], input=json.dumps(payload), text=True, capture_output=True)
+        self.assertEqual(p.returncode, 2)
+        self.assertIn("Run `gh` on its own", p.stderr)
+
+
 class LocalRules(GuardTest):
     def test_env_files_and_main(self) -> None:
         self.check([
