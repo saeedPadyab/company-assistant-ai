@@ -17,6 +17,7 @@ Run from the repo root.
 - Typecheck: `pnpm typecheck`
 - Lint: `pnpm lint`
 - Test: `pnpm test` (server tests need the DB running and migrated)
+- Verify (the CI checks for the packages this branch changed): `scripts/verify.sh`; everything: `scripts/verify.sh --full`
 - Dev: `pnpm dev`
 
 ## Rules
@@ -39,4 +40,4 @@ Run from the repo root.
 ## Starting work
 - Before the first edit, check the branch. On `main`, or on a branch without an issue number: stop, ask for the issue (number or link) and offer to run `/start`. Never edit on `main`.
 - Given an issue number or link: run `/start` with it.
-- Run typecheck, lint and test before saying a change is done.
+- A change is done only when `scripts/verify.sh` passes. A Stop hook runs it when you finish a turn on a branch with changes and sends you back to fix red checks (at most 2 rounds). Fix the cause; never skip, weaken or delete checks to get green.
