@@ -363,6 +363,7 @@ class SandboxExcludedAlone(GuardTest):
             'gh pr create --title x --body "$(cat notes.md)"', 'gh issue comment 1 --body "see `git log -1`"',
             "gh pr create --title x --body \"$(cat <<'EOF'\nbody\nEOF\n)\"",
             "gh pr create --body-file - <<EOF\n$(git log -1)\nEOF",
+            "gh pr create --body-file - <<-EOF\n\tbody\n\t\tEOF\ngit status",  # resumes after the terminator line
             # `<<` inside quotes is text, not a heredoc: the lines after it are still commands
             'echo "<<EOF"\ngit status && gh issue view 1', "echo '<<EOF'\ngh issue view 1",
         ]])
@@ -376,6 +377,7 @@ class SandboxExcludedAlone(GuardTest):
             ("git status && git log", "allow"), ("cd . && git push", "ask"), ("git push", "ask"),
             ("gh pr create --base main --title x --body-file - <<'EOF'\nfirst line\n- second; line\nEOF", "ask"),
             ("gh pr create --body-file - <<'EOF'\nuses `$(x)` and `y`\nEOF", "ask"),  # quoted heredoc: literal
+            ("gh pr create --body-file - <<-EOF\n\tbody\n\t\tEOF\n", "ask"),  # indented `<<-` terminator
             ("gh pr view 1 --json title --jq '.title | \"$(x)\"'", "allow"),  # single quotes: literal
             # quoted code that mentions gh and `<<EOF` is one command, not a chain
             ("cd /x && python3 -c '\nx = \"a; gh issue view 1\"\ny = \"<<EOF\"\n'", "allow"),

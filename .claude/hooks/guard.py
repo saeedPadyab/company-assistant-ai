@@ -556,9 +556,8 @@ def heredocs_and_substitution(command: str) -> tuple[str, bool]:
                 body: list[str] = []
                 while lines and lines[0].strip() != delim:
                     body.append(lines.pop(0))
-                if lines:
-                    lines.pop(0)
-                end += sum(len(b) + 1 for b in body) + len(delim) + 1
+                terminator = len(lines.pop(0)) + 1 if lines else 0  # the whole line, indent included
+                end += sum(len(b) + 1 for b in body) + terminator
                 subst |= not quoted and any("$(" in b or "`" in b for b in body)
             pending, i = [], end
             continue
