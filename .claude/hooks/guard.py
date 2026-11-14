@@ -54,7 +54,10 @@ $TMPDIR. So the cases above can no longer write the note, the hooks or git confi
 
 Still open, the known limits: `excludedCommands` (git push/fetch/pull, gh, docker compose,
 scripts/worktree.sh, scripts/review-status.sh) run unsandboxed and are matched on text, also after a
-leading `cd <dir> &&`, so for them this guard is the only check (a compose file edited in the repo
+leading `cd <dir> &&`, so for them this guard is the only check. Chained to any other command they
+stay sandboxed and fail with an error that does not name the cause, so the guard denies that form
+and says to run them on their own (issue #13); wrapped forms (`timeout 60 gh ...`, `./scripts/...`)
+are not caught and simply stay sandboxed (a compose file edited in the repo
 runs unsandboxed through `docker compose`); a script that runs `git push --no-verify` is sandboxed but may reach GitHub,
 since in auto mode unlisted hosts were reachable (`network.strictAllowlist` lives in user or
 managed settings, not here); hooks and MCP servers run outside the sandbox. The main session writes
@@ -127,6 +130,13 @@ WRAPPERS = {
     "stdbuf": {"-i", "-o", "-e"}, "ionice": {"-c", "-n", "-p"},
 }
 
+
+# excludedCommands in .claude/settings.json: the sandbox lets them out only when the whole call is that
+# command, after at most a leading `cd <dir> &&` (issue #13)
+SANDBOX_EXCLUDED_GIT = {"push", "fetch", "pull"}
+SANDBOX_EXCLUDED_SCRIPTS = {"review-status.sh", "worktree.sh"}
+LEADING_CD = re.compile(r"\s*cd\s+(\"[^\"]*\"|'[^']*'|[^\s;&|()<>]+)\s*&&")
+HEREDOC = re.compile(r"(?<!<)<<(?!<)-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
 
 SEPARATORS = {";", "&&", "||", "|", "&", "|&", ";;", "\n", "{", "}"}
 SEPARATOR_RUN = re.compile(r"[;&|()\n]+")  # shlex joins adjacent punctuation: `);`, `)&&`, `((`
@@ -528,6 +538,81 @@ def scan_raw(command: str, agent_type: str | None) -> list[tuple[str, str]]:
     return found
 
 
+def heredocs_and_substitution(command: str) -> tuple[str, bool]:
+    """(the command without heredoc bodies, whether it runs a command substitution).
+
+    A heredoc body (`<<'EOF'` ... `EOF`) is data, not commands, so it is dropped. `$(` and backticks run a
+    command outside single quotes and quoted heredoc bodies, inside double quotes too, which shlex cannot tell.
+    `<<` counts only outside quotes, so text that mentions it in a string does not start a heredoc."""
+    out: list[str] = []
+    pending: list[tuple[str, bool]] = []  # (delimiter, body is quoted)
+    subst, quote, i, n = False, None, 0, len(command)
+    while i < n:
+        c = command[i]
+        if c == "\n" and quote is None and pending:
+            out.append(c)
+            lines, end = command[i + 1:].split("\n"), i + 1
+            for delim, quoted in pending:
+                body: list[str] = []
+                while lines and lines[0].strip() != delim:
+                    body.append(lines.pop(0))
+                terminator = len(lines.pop(0)) + 1 if lines else 0  # the whole line, indent included
+                end += sum(len(b) + 1 for b in body) + terminator
+                subst |= not quoted and any("$(" in b or "`" in b for b in body)
+            pending, i = [], end
+            continue
+        if c == "\\" and quote != "'":
+            out.append(command[i:i + 2])
+            i += 2
+            continue
+        if quote == "'":
+            quote = None if c == "'" else quote
+        elif c in "'\"" and quote is None:
+            quote = c
+        elif c == '"' and quote == '"':
+            quote = None
+        elif c == "`" or command.startswith("$(", i):
+            subst = True
+        elif quote is None and (m := HEREDOC.match(command, i)):
+            pending.append((m.group(2), bool(m.group(1))))
+        out.append(c)
+        i += 1
+    return "".join(out), subst
+
+
+def excluded_name(tokens: list[str]) -> str | None:
+    """The excludedCommands entry this simple command matches (`gh`, `git push`, ...), or None."""
+    head = os.path.basename(tokens[0])
+    if head == "gh":
+        return "gh"
+    if head in SANDBOX_EXCLUDED_SCRIPTS:
+        return f"scripts/{head}"
+    if head == "docker" and len(tokens) > 1 and tokens[1] == "compose":
+        return "docker compose"
+    sub, _ = git_subcommand(tokens)
+    if sub in SANDBOX_EXCLUDED_GIT:
+        return f"git {sub}"
+    return None
+
+
+def check_alone(command: str) -> tuple[str, str] | None:
+    """Deny an excluded command chained to anything but a leading `cd <dir> &&`: the sandbox matches the whole
+    call's text, so such a call stays sandboxed and fails later on the network or on .git/refs/notes."""
+    text, subst = heredocs_and_substitution(command)
+    segments = segments_of(text)
+    names = [n for s in segments if (n := excluded_name(s))]
+    if not names:
+        return None
+    rest = segments
+    if len(segments) > 1 and segments[0][0] == "cd" and len(segments[0]) == 2 and LEADING_CD.match(command):
+        rest = segments[1:]
+    if len(rest) <= 1 and not subst:
+        return None
+    return "deny", (f"Run `{names[0]}` on its own, as a separate Bash call (`cd <dir> && {names[0]} ...` at most). "
+                    "Chained with other commands (`&&`, `;`, `|`, `$(...)`, a second line) the whole call stays in "
+                    "the sandbox, and it fails on the network or on .git/refs/notes.")
+
+
 def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: str | None = None,
            verdict_of=review_verdict) -> tuple[str, str] | None:
     """Follows `cd <dir>` and `git -C <dir>` so a commit in a worktree is checked against that worktree's branch."""
@@ -540,6 +625,8 @@ def decide(command: str, cwd: str | None, branch_of=current_branch, agent_type: 
         return cache[path]
 
     results.extend(scan_raw(command, agent_type))
+    if alone := check_alone(command):
+        results.append(alone)
     # env assignments are stripped from segments, so check them on the raw text:
     # GIT_NOTES_REF=refs/notes/ai-review, GIT_CONFIG_VALUE_0=..., or R=ai-review used later as $R
     if agent_type != REVIEWER_AGENT and re.search(
