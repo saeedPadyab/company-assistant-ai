@@ -10,15 +10,20 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --import tsx src/db/migrate.ts",
-    "db:seed": "node --import tsx src/db/seed.ts"
+    "db:seed": "node --import tsx src/db/seed.ts",
+    "inngest:dev": "npx --yes inngest-cli@latest dev -u http://localhost:3001/api/inngest",
+    "handbook:ingest": "node --import tsx src/handbook/send-ingest.ts",
+    "eval:retrieval": "node --import tsx src/handbook/eval-retrieval.ts"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.118",
     "@hono/node-server": "^2.1.3",
     "ai": "^7.0.173",
     "better-auth": "^1.7.25",
+    "cheerio": "^1.2.0",
     "dotenv": "^18.0.9",
     "drizzle-orm": "^0.45.4",
+    "gpt-tokenizer": "^4.1.2",
     "hono": "^4.13.16",
     "inngest": "^4.26.2",
     "postgres": "^4.0.0",
