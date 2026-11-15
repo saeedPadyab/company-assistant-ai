@@ -1,1 +1,20 @@
 @import "tailwindcss";
+
+/* Colors from the login design (Design canvas "Company Assistant login"). */
+@theme {
+  --color-ink: #16181d;
+  --color-muted: #5a5f6b;
+  --color-line: #c9cbd1;
+  --color-paper: #f6f6f3;
+  --color-panel: #14161c;
+  --color-panel-text: #ecedf0;
+  --color-panel-muted: #a3a8b5;
+  --color-panel-icon: #a9b1ff;
+  --color-accent: #3442c4;
+  --color-accent-hover: #232e99;
+  --color-accent-ring: #d9dcfb;
+  --color-danger: #c0321f;
+  --color-danger-bg: #fdecea;
+  --color-danger-line: #f3b9b2;
+  --color-danger-text: #8a1f12;
+}
