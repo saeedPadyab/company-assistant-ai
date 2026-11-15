@@ -19,7 +19,12 @@ export default function Home() {
   }, [router]);
 
   async function signOut() {
-    await authClient.signOut();
+    const { error } = await authClient.signOut();
+    if (error) {
+      // The session may still be valid: say so instead of pretending the user is out.
+      setError("Sign-out failed. Try again.");
+      return;
+    }
     router.replace("/login");
   }
 

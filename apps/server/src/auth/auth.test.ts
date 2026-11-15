@@ -2,12 +2,12 @@ import { eq } from "drizzle-orm"
 import { afterAll, describe, expect, it } from "vitest"
 import app from "../app.js"
 import { closeDb, db } from "../db/client.js"
-import { sessions, users } from "../db/schema.js"
+import { users } from "../db/schema.js"
 import { DEV_PASSWORD } from "../db/seed-data.js"
-import { signIn, teamByName, userByEmail } from "../test/helpers.js"
+import { deleteTestSessions, signIn, teamByName, userByEmail } from "../test/helpers.js"
 
 afterAll(async () => {
-    await db.delete(sessions)
+    await deleteTestSessions()
     await closeDb()
 })
 
@@ -65,6 +65,24 @@ describe("GET /me", () => {
             expect((await response.json()).teamId).toBe(engineering.id)
         } finally {
             await db.update(users).set({ teamId: sara.teamId }).where(eq(users.id, sara.id))
+        }
+    })
+
+    it("shows a user whose role changed the new role on the next request", async () => {
+        const sara = await userByEmail("sara@example.com")
+        const cookie = await signIn(sara.email)
+        try {
+            await db.update(users).set({ role: "manager" }).where(eq(users.id, sara.id))
+
+            const promoted = await app.request("/me", { headers: { cookie } })
+            expect((await promoted.json()).role).toBe("manager")
+
+            await db.update(users).set({ role: "employee" }).where(eq(users.id, sara.id))
+
+            const demoted = await app.request("/me", { headers: { cookie } })
+            expect((await demoted.json()).role).toBe("employee")
+        } finally {
+            await db.update(users).set({ role: sara.role }).where(eq(users.id, sara.id))
         }
     })
 })

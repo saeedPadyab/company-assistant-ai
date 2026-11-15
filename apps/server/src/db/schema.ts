@@ -9,7 +9,7 @@ export const teams = pgTable("teams", {
     name: text("name").notNull().unique(),
 })
 
-// Our own users table, also used by Better Auth as its "user" model (src/auth.ts).
+// Our own users table, also used by Better Auth as its "user" model (src/auth/auth.ts).
 // role and teamId are ours: Better Auth may read them but never lets a client set them.
 export const users = pgTable("users", {
     id: uuid("id").primaryKey().defaultRandom(),
