@@ -74,14 +74,14 @@ These constraints are part of the contract. Relaxing them is a new version, not 
 Deliberately later. See `document/assistant-versions.html` for the full second version.
 
 - Hybrid search, reranking, and hash-based incremental handbook updates
-- A function started by an event after the request ends (Inngest). Fixed steps are a workflow, such as a reminder or a handbook re-index. An uncertain next step, chosen by the model, is a background agent. Version 1 stores leave as `pending`; the manager's click is a new request
+- A function started by an event after the request ends (Inngest), except handbook ingestion, which runs on Inngest in this version (ADR 004). Fixed steps are a workflow, such as a reminder or a handbook re-index. An uncertain next step, chosen by the model, is a background agent. Version 1 stores leave as `pending`; the manager's click is a new request
 - Row-level security, rate limiting, and an audit log beyond request status
 - Sandbox, code execution, charts, and free-form analysis
 - Routing, handoff, and an analyst agent
 - Splitting history, state, and context
 - MCP server and Slack
 - Prompt-injection defenses, PII redaction, and a red-team table
-- Per-user token budgets, retry on provider rate limits, and model fallback
+- Per-user token budgets, retry on provider rate limits in chat (ingestion retries through Inngest), and model fallback
 - The full evaluation set, LLM-as-judge, and prompt versioning
 - Langfuse, OpenTelemetry, Sentry, metrics, and alerts
 - Playwright, production deployment, Terraform, feature flags, and backups

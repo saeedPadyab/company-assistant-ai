@@ -20,7 +20,7 @@ git branch --show-current
 git rev-parse --show-toplevel
 ```
 
-- **In the issue's worktree:** the branch is `<type>/<KEY>-<slug>` with this KEY. Do steps 2 and 6 only: no branch proposal, no worktree, no "where to continue" question.
+- **In the issue's worktree:** the branch is `<type>/<KEY>-<slug>` with this KEY. Do steps 2 and 6 only: no branch proposal, no worktree, no move.
 - **The worktree already exists elsewhere** (`git worktree list` shows a branch for this KEY): skip steps 3 and 4, go to step 5.
 - **Otherwise:** all steps.
 
@@ -55,12 +55,14 @@ scripts/worktree.sh new <KEY> <slug> <type>
 
 It creates `../company-assistant-wt/<KEY>`, copies the `.env` files with their own database `assistant_<KEY>`, installs and migrates. If it stops at "Postgres is not running", tell the user to start Docker and run the `setup` line the script printed; the worktree itself already exists.
 
-## 5. Work only in the worktree
+## 5. Move this session into the worktree
 
-Only when this session is not in the worktree. Its folder stays where it is, so tell the user both options and let them pick:
+Only when this session is not in the worktree. Do not ask the user where to continue: they started this session for this issue, so this session moves.
 
-- **New session in the worktree (recommended):** open a Claude session with the folder `../company-assistant-wt/<KEY>` and say `/work-on <KEY>`; there it only reads the issue, names the session and plans.
-- **Continue here:** every Read and Edit uses the worktree's absolute path, and every shell command starts with `cd <worktree path> && ...`. Never edit files in the main checkout.
+- **Claude desktop app:** move the session with the directory tool (`mcp__ccd_directory__change_directory` to the worktree's absolute path; load it with ToolSearch if it is deferred). Then run `git branch --show-current` there to check the branch is the issue's, and go on with step 6.
+- **No such tool, or the move is refused:** tell the user in one line to open a session with the folder `../company-assistant-wt/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
+
+Never edit files in the main checkout.
 
 ## 6. Plan before the first edit
 

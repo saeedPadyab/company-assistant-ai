@@ -1,4 +1,15 @@
-import { boolean, pgEnum, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core"
+import {
+    boolean,
+    index,
+    integer,
+    pgEnum,
+    pgTable,
+    text,
+    timestamp,
+    unique,
+    uuid,
+    vector,
+} from "drizzle-orm/pg-core"
 
 export const userRole = pgEnum("user_role", ["employee", "manager", "hr"])
 
@@ -70,3 +81,40 @@ export const verifications = pgTable("verifications", {
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 })
+
+/** Width of `handbook_chunks.embedding`. Fixed by the embedding model (ADR 003); a new model width needs a new migration. */
+export const EMBEDDING_DIMENSIONS = 1536
+
+/**
+ * One piece of a handbook page, small enough to embed and to quote as a source.
+ * A page is stored as chunks 0..n-1; (page_url, chunk_index) is unique, so ingesting a page
+ * again overwrites its chunks instead of adding copies.
+ */
+export const handbookChunks = pgTable(
+    "handbook_chunks",
+    {
+        id: uuid("id").primaryKey().defaultRandom(),
+        /** The page without an anchor, e.g. https://handbook.gitlab.com/handbook/people-group/paid-time-off/ */
+        pageUrl: text("page_url").notNull(),
+        pageTitle: text("page_title").notNull(),
+        /** The heading the chunk sits under; the page title for text before the first heading. */
+        section: text("section").notNull(),
+        /** The link a citation opens: pageUrl plus the section's #anchor. */
+        url: text("url").notNull(),
+        chunkIndex: integer("chunk_index").notNull(),
+        content: text("content").notNull(),
+        tokenCount: integer("token_count").notNull(),
+        /** Hash of the page's cleaned text. Same hash on the next ingest: nothing to redo (v2 re-index). */
+        pageHash: text("page_hash").notNull(),
+        /** Empty until the chunk's embedding batch has run (ADR 004: chunks are stored first, embedded later). */
+        embedding: vector("embedding", { dimensions: EMBEDDING_DIMENSIONS }),
+        createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+        updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+    },
+    (t) => [
+        unique("handbook_chunks_page_chunk_unique").on(t.pageUrl, t.chunkIndex),
+        // HNSW: an approximate nearest-neighbour index, so a search does not compare the
+        // question with every row. vector_cosine_ops matches the `<=>` (cosine distance) queries.
+        index("handbook_chunks_embedding_idx").using("hnsw", t.embedding.op("vector_cosine_ops")),
+    ],
+)
