@@ -21,8 +21,9 @@ export function fakeVector(text: string): number[] {
 /**
  * The fake model, and the texts it embedded, in order, so tests can see what was paid for.
  * With failOnCall: n, call number n throws, like an API that is down, and embeds nothing.
+ * failWith picks the error it throws (a 429, say); the default is a plain Error.
  */
-export function fakeEmbeddingModel({ failOnCall }: { failOnCall?: number } = {}) {
+export function fakeEmbeddingModel({ failOnCall, failWith }: { failOnCall?: number; failWith?: () => Error } = {}) {
     const embeddedTexts: string[] = []
     let calls = 0
     const model = new MockEmbeddingModelV4({
@@ -31,7 +32,7 @@ export function fakeEmbeddingModel({ failOnCall }: { failOnCall?: number } = {})
         maxEmbeddingsPerCall: 2048,
         doEmbed: async ({ values }) => {
             calls++
-            if (calls === failOnCall) throw new Error("embedding API unavailable")
+            if (calls === failOnCall) throw failWith?.() ?? new Error("embedding API unavailable")
             embeddedTexts.push(...values)
             return { embeddings: values.map(fakeVector), warnings: [] }
         },

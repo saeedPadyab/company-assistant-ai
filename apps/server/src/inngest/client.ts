@@ -1,12 +1,13 @@
 import { Inngest } from "inngest"
 import { z } from "zod"
-import { isHandbookUrl } from "../handbook/fetch.js"
+import { isHandbookUrl, normalizeHandbookUrl } from "../handbook/fetch.js"
 
 // With INNGEST_DEV=1 (local .env) the SDK talks to the Dev Server and needs no keys.
 // In production it needs INNGEST_EVENT_KEY and INNGEST_SIGNING_KEY (ADR 004).
 export const inngest = new Inngest({ id: "company-assistant" })
 
-const handbookUrl = z.url().refine(isHandbookUrl, "must be a page on https://handbook.gitlab.com")
+// Parsing also normalizes the URL, so every run, chunk and concurrency key uses the same form.
+const handbookUrl = z.url().refine(isHandbookUrl, "must be a page on https://handbook.gitlab.com").transform(normalizeHandbookUrl)
 
 /** Starts a full ingest. Without `urls`, the pages in src/handbook/pages.ts. */
 export const INGEST_REQUESTED = "handbook/ingest.requested"

@@ -1,15 +1,17 @@
 import { InngestTestEngine } from "@inngest/test"
+import { APICallError } from "ai"
 import { and, asc, eq, isNotNull } from "drizzle-orm"
+import { RetryAfterError } from "inngest"
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest"
 import { closeDb, db } from "../db/client.js"
 import { handbookChunks } from "../db/schema.js"
 import { EMBED_BATCH_SIZE } from "../handbook/embed.js"
-import { PageFetchError, fetchPage } from "../handbook/fetch.js"
+import { OffSiteRedirectError, PageFetchError, fetchPage } from "../handbook/fetch.js"
 import { HANDBOOK_PAGES } from "../handbook/pages.js"
 import { fakeEmbeddingModel } from "../test/fake-embedding.js"
 import { INGEST_REQUESTED, PAGE_REQUESTED } from "./client.js"
 import { handbookIngest } from "./handbook-ingest.js"
-import { ingestPage } from "./ingest-page.js"
+import { ingestPage, rethrowRateLimit } from "./ingest-page.js"
 
 // No network in these tests: fetchPage and the embedding model are replaced.
 const fake = vi.hoisted(() => ({ current: undefined as ReturnType<typeof fakeEmbeddingModel> | undefined }))
@@ -33,6 +35,18 @@ function testPage(): string {
 
 // A tuple, not an array: the test engine wants at least one event.
 const pageEvent = (url = PAGE_URL): [{ name: string; data: { url: string } }] => [{ name: PAGE_REQUESTED, data: { url } }]
+
+/** What the OpenAI provider throws on HTTP 429. */
+function rateLimitError(retryAfter?: string): APICallError {
+    return new APICallError({
+        message: "Rate limit reached",
+        url: "https://api.openai.com/v1/embeddings",
+        requestBodyValues: {},
+        statusCode: 429,
+        responseHeaders: retryAfter ? { "retry-after": retryAfter } : {},
+        isRetryable: true,
+    })
+}
 
 function rows() {
     return db.select().from(handbookChunks).where(eq(handbookChunks.pageUrl, PAGE_URL)).orderBy(asc(handbookChunks.chunkIndex))
@@ -120,11 +134,66 @@ describe("ingest-page", () => {
         expect(fetchPage).not.toHaveBeenCalled()
     })
 
+    it("on a 429, stops the batch and asks Inngest to retry after the API's retry-after", async () => {
+        fake.current = fakeEmbeddingModel({ failOnCall: 1, failWith: () => rateLimitError("12") })
+        const { ctx, error } = await run({ events: pageEvent() })
+        expect(error).toBeDefined()
+        // The step that failed is batch 0, and it threw a RetryAfterError, not the raw 429.
+        const stepRun = vi.mocked(ctx.step.run).mock
+        expect(stepRun.calls.map(([id]) => id)).toEqual(["fetch-and-chunk", "embed-batch-0"])
+        // The engine hands back the error serialized, without retryAfter; rethrowRateLimit
+        // is tested on its own below for the header.
+        expect(error).toMatchObject({ name: "RetryAfterError", message: "embedding API rate limit (429)" })
+        expect(fake.current.embeddedTexts).toHaveLength(0)
+    })
+
+    it("stores nothing, and does not retry, when the redirect leaves the handbook", async () => {
+        vi.mocked(fetchPage).mockRejectedValue(new OffSiteRedirectError(PAGE_URL, "https://evil.example/"))
+        const { result, error } = await run({ events: pageEvent() })
+        expect(result).toBeUndefined()
+        expect(error instanceof Error ? error.message : JSON.stringify(error)).toMatch(/outside the handbook/)
+        expect(await rows()).toHaveLength(0)
+    })
+
+    it("stores a page under one URL, whatever #fragment, ?query or missing slash the event had", async () => {
+        const { result } = await run({ events: pageEvent(`${PAGE_URL.slice(0, -1)}?utm=x#rule-3`) })
+        expect(result).toMatchObject({ url: PAGE_URL, chunkCount: SECTIONS })
+        expect(vi.mocked(fetchPage)).toHaveBeenCalledWith(PAGE_URL)
+        expect((await rows())[3].url).toBe(`${PAGE_URL}#rule-3`)
+    })
+
+    it("runs at most one run per page at a time", () => {
+        expect(ingestPage.opts.concurrency).toEqual([{ limit: 5 }, { key: "event.data.url", limit: 1 }])
+    })
+
     it("stores nothing for a page that is not found", async () => {
         vi.mocked(fetchPage).mockRejectedValue(new PageFetchError(PAGE_URL, 404))
         const { result } = await run({ events: pageEvent() })
         expect(result).toBeUndefined()
         expect(await rows()).toHaveLength(0)
+    })
+})
+
+describe("rethrowRateLimit", () => {
+    const thrown = (error: unknown) => {
+        try {
+            rethrowRateLimit(error)
+        } catch (e) {
+            return e
+        }
+    }
+
+    it("waits 30s when the 429 has no retry-after header", () => {
+        expect((thrown(rateLimitError()) as RetryAfterError).retryAfter).toBe("30")
+    })
+
+    it("rounds a fractional retry-after up to whole seconds", () => {
+        expect((thrown(rateLimitError("1.2")) as RetryAfterError).retryAfter).toBe("2")
+    })
+
+    it("passes any other error on unchanged, for Inngest's normal retries", () => {
+        const other = new Error("boom")
+        expect(thrown(other)).toBe(other)
     })
 })
 
@@ -141,6 +210,11 @@ describe("handbook-ingest", () => {
             "fan-out-pages",
             HANDBOOK_PAGES.map((url) => ({ name: PAGE_REQUESTED, data: { url } })),
         )
+    })
+
+    it("normalizes the urls in the event before sending them", async () => {
+        const { ctx } = await runIngest({ events: [{ name: INGEST_REQUESTED, data: { urls: [`${PAGE_URL}#top`] } }], steps })
+        expect(ctx.step.sendEvent).toHaveBeenCalledWith("fan-out-pages", [{ name: PAGE_REQUESTED, data: { url: PAGE_URL } }])
     })
 
     it("uses the urls in the event when there are some", async () => {

@@ -48,7 +48,9 @@ export function chunkPage(page: CleanPage, pageUrl: string, options: ChunkOption
         const headingLine = s.headings.length > 0 ? `${page.title} › ${section}` : page.title
         const url = s.anchor ? `${pageUrl}#${s.anchor}` : pageUrl
         // One token of slack: tokens of joined text can differ by one from the sum of the parts.
-        const bodyBudget = options.maxTokens - countTokens(`${headingLine}\n\n`) - 1
+        // A heading line that eats more than half the budget still leaves half for the body:
+        // those chunks go over maxTokens, but the split always moves forward.
+        const bodyBudget = Math.max(options.maxTokens - countTokens(`${headingLine}\n\n`) - 1, Math.floor(options.maxTokens / 2))
 
         for (const body of packBlocks(s.blocks, bodyBudget, options.overlapTokens)) {
             const content = `${headingLine}\n\n${body}`
@@ -89,6 +91,8 @@ export function packBlocks(blocks: string[], maxTokens: number, overlapTokens: n
 
 /** Last resort for one very long block: cut it into pieces of at most maxTokens. */
 function splitByTokens(text: string, maxTokens: number): string[] {
+    // With 0 tokens per piece the loop below would never move forward.
+    if (maxTokens < 1) throw new Error(`maxTokens must be at least 1, got ${maxTokens}`)
     const tokens = encode(text)
     const parts: string[] = []
     let start = 0

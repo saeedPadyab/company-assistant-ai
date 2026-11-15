@@ -62,6 +62,13 @@ describe("chunkPage", () => {
     it("gives the same chunks for the same page", () => {
         expect(chunkPage(page, PAGE_URL, options)).toEqual(chunks)
     })
+    it("finishes when the heading line alone is longer than maxTokens", () => {
+        const longHeading = Array.from({ length: 200 }, (_, i) => `word${i}`).join(" ")
+        const page: CleanPage = { title: "T", sections: [{ headings: [longHeading], anchor: "x", blocks: sentences(30) }] }
+        const chunks = chunkPage(page, "https://handbook.gitlab.com/handbook/t/", options)
+        expect(chunks.length).toBeGreaterThan(0)
+        expect(chunks.every((c) => c.content.startsWith(`T › ${longHeading}`))).toBe(true)
+    })
 })
 
 describe("packBlocks", () => {

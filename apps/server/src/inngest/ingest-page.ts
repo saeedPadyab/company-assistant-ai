@@ -3,7 +3,7 @@ import { NonRetriableError, RetryAfterError } from "inngest"
 import { chunkPage, hashPage } from "../handbook/chunk.js"
 import { cleanPage } from "../handbook/clean.js"
 import { batchCount, embedBatch } from "../handbook/embed.js"
-import { PageFetchError, fetchPage } from "../handbook/fetch.js"
+import { OffSiteRedirectError, PageFetchError, fetchPage } from "../handbook/fetch.js"
 import { storePage } from "../handbook/store.js"
 import { PAGE_REQUESTED, inngest, pageRequestedData } from "./client.js"
 
@@ -21,7 +21,10 @@ export const ingestPage = inngest.createFunction(
         triggers: [{ event: PAGE_REQUESTED }],
         // At most five pages at a time, and at most 30 page runs started per minute, to stay
         // under the embedding API's rate limit (docs/features.md, feature 6).
-        concurrency: 5,
+        // And one run per page: two runs of one page could otherwise interleave, and the older
+        // run write the embedding of the old text onto a chunk the newer run just rewrote.
+        // The key is the URL as handbook-ingest sends it, already normalized (client.ts).
+        concurrency: [{ limit: 5 }, { key: "event.data.url", limit: 1 }],
         throttle: { limit: 30, period: "1m" },
         retries: 4,
     },
@@ -36,6 +39,7 @@ export const ingestPage = inngest.createFunction(
                 if (error instanceof PageFetchError && error.status >= 400 && error.status < 500) {
                     throw new NonRetriableError(error.message)
                 }
+                if (error instanceof OffSiteRedirectError) throw new NonRetriableError(error.message)
                 throw error
             })
             let page
@@ -62,7 +66,7 @@ export const ingestPage = inngest.createFunction(
  * A 429 from the embedding API: retry when the API says it is ready again (its
  * retry-after header), not on Inngest's normal backoff schedule.
  */
-function rethrowRateLimit(error: unknown): never {
+export function rethrowRateLimit(error: unknown): never {
     if (APICallError.isInstance(error) && error.statusCode === 429) {
         const seconds = Number(error.responseHeaders?.["retry-after"])
         throw new RetryAfterError("embedding API rate limit (429)", Number.isFinite(seconds) && seconds > 0 ? `${Math.ceil(seconds)}s` : "30s", {

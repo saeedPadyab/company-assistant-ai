@@ -35,6 +35,7 @@ export async function searchHandbook(question: string, k = 5, pages?: string[]):
         })
         .from(handbookChunks)
         // `pages` limits the search to some pages: tests use it to stay out of real chunks.
+        // The agent's tool must not let the model pass it: the tool takes the question only.
         .where(pages ? and(where, inArray(handbookChunks.pageUrl, pages)) : where)
         .orderBy(asc(distance))
         .limit(k)

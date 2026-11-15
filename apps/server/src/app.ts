@@ -62,7 +62,8 @@ export function createApp({ pingDb, pingTimeoutMs = 2000 }: AppDeps) {
 
   // Inngest calls this route to learn the functions (PUT) and to run their steps (POST).
   // No user session here: outside dev mode the SDK checks Inngest's request signature
-  // (INNGEST_SIGNING_KEY), and with INNGEST_DEV=1 only the local Dev Server calls it.
+  // (INNGEST_SIGNING_KEY). With INNGEST_DEV=1 it checks nothing, so anyone who can reach this
+  // port can start runs: dev mode is for a local machine only, never a deployed server.
   const inngestHandler = serveInngest({ client: inngest, functions })
   app.on(["GET", "POST", "PUT"], "/api/inngest", (c) => inngestHandler(c))
 
