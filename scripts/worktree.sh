@@ -49,6 +49,9 @@ copy_env() {
   else
     cp "$src" "$dest"
   fi
+  # A source without a final newline gives a dest without one, and the next `>> .env`
+  # would glue its line onto the last one (OPENAI_API_KEY=...INNGEST_DEV=1, issue #21).
+  if [ -s "$dest" ] && [ -n "$(tail -c 1 "$dest")" ]; then echo >>"$dest"; fi
   chmod 600 "$dest"
 }
 
@@ -189,6 +192,9 @@ cmd_remove() {
     echo "    kept: not merged into its upstream or HEAD (delete it yourself once the PR is merged: git branch -D $branch)"
   fi
 }
+
+# Sourced (by scripts/tests/test_worktree.py), only the functions above are defined.
+[[ "${BASH_SOURCE[0]}" == "$0" ]] || return 0
 
 sub="${1:-}"
 [ $# -gt 0 ] && shift
