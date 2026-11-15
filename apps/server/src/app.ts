@@ -1,10 +1,13 @@
 import { sql } from "drizzle-orm"
 import { Hono } from "hono"
 import { cors } from "hono/cors"
+import { serve as serveInngest } from "inngest/hono"
 import { WEB_ORIGIN } from "./config.js"
 import { auth } from "./auth/auth.js"
 import { requireUser } from "./auth/middleware.js"
 import { db } from "./db/client.js"
+import { inngest } from "./inngest/client.js"
+import { functions } from "./inngest/functions.js"
 
 export type AppDeps = {
   /** Runs a trivial query; resolves when the database answers. */
@@ -56,6 +59,12 @@ export function createApp({ pingDb, pingTimeoutMs = 2000 }: AppDeps) {
 
   // Who am I? Role and team come fresh from the database (see requireUser).
   app.get("/me", requireUser, (c) => c.json(c.get("user")))
+
+  // Inngest calls this route to learn the functions (PUT) and to run their steps (POST).
+  // No user session here: outside dev mode the SDK checks Inngest's request signature
+  // (INNGEST_SIGNING_KEY), and with INNGEST_DEV=1 only the local Dev Server calls it.
+  const inngestHandler = serveInngest({ client: inngest, functions })
+  app.on(["GET", "POST", "PUT"], "/api/inngest", (c) => inngestHandler(c))
 
   return app
 }

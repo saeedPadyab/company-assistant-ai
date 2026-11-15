@@ -1,0 +1,83 @@
+{
+  "description": "Retrieval golden set (docs/features.md, feature 6 and 13). Each question names the handbook page(s) that answer it; a hit is any chunk of one of those pages in the top k. Every page is in src/handbook/pages.ts. Facts checked against the pages on 2026-11-15.",
+  "questions": [
+    {
+      "question": "How many weeks of paid parental leave does GitLab give?",
+      "pages": [
+        "https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/leave-types/",
+        "https://handbook.gitlab.com/handbook/total-rewards/benefits/parental-leave-toolkit/"
+      ]
+    },
+    {
+      "question": "How much time off should I take in a year?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/time-off-types/"]
+    },
+    {
+      "question": "How do I take a sick day?",
+      "pages": [
+        "https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/time-off-types/",
+        "https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/leave-types/"
+      ]
+    },
+    {
+      "question": "What should I set in Slack and my calendar before going on vacation?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/time-off-and-absence/time-away-philosophy/"]
+    },
+    {
+      "question": "Is there a budget for my home office equipment?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/expenses/"]
+    },
+    {
+      "question": "What is the maximum amount of expenses reimbursed in one month?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/expenses/"]
+    },
+    {
+      "question": "By when do I have to submit my expense reports?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/expenses/"]
+    },
+    {
+      "question": "Should I use a VPN on hotel wifi when I travel for work?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/travel/"]
+    },
+    {
+      "question": "How is my travel priced when a customer pays for the trip?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/travel/sponsored/"]
+    },
+    {
+      "question": "Can GitLab pay for a course or certification that helps my career?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/learning-and-development/growth-and-development/"]
+    },
+    {
+      "question": "When does the procurement team have to negotiate a software contract?",
+      "pages": ["https://handbook.gitlab.com/handbook/finance/procurement/"]
+    },
+    {
+      "question": "How do I report harassment by a colleague?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/anti-harassment/"]
+    },
+    {
+      "question": "What happens to my laptop when I leave the company?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/offboarding/"]
+    },
+    {
+      "question": "What should I talk about in a one-on-one with my manager?",
+      "pages": ["https://handbook.gitlab.com/handbook/leadership/1-1/"]
+    },
+    {
+      "question": "When should I use Slack instead of email?",
+      "pages": ["https://handbook.gitlab.com/handbook/communication/"]
+    },
+    {
+      "question": "Which benefits do contractors get?",
+      "pages": ["https://handbook.gitlab.com/handbook/total-rewards/benefits/general-and-entity-benefits/"]
+    },
+    {
+      "question": "How do I set up two-factor authentication?",
+      "pages": ["https://handbook.gitlab.com/handbook/tools-and-tips/"]
+    },
+    {
+      "question": "Who helps me during my first weeks as a new team member?",
+      "pages": ["https://handbook.gitlab.com/handbook/people-group/general-onboarding/"]
+    }
+  ]
+}
