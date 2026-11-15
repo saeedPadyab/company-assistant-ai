@@ -31,6 +31,7 @@ export default function LoginPage() {
         return;
       }
       if (error.status === 401) setFailure({ message: WRONG_CREDENTIALS, wrongCredentials: true });
+      // better-fetch reports a request that got no HTTP answer as an error with status 0.
       else if (!error.status) setFailure({ message: NO_ANSWER, wrongCredentials: false });
       else setFailure({ message: FAILED, wrongCredentials: false });
     } catch {
@@ -42,7 +43,7 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="flex min-h-screen flex-col bg-paper text-ink md:grid md:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
+    <div className="flex min-h-screen flex-col bg-paper text-ink md:grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:grid-cols-[minmax(0,560px)_minmax(0,1fr)]">
       <BrandPanel />
 
       <main className="flex flex-1 justify-center px-6 py-8 md:items-center md:p-12">
@@ -50,7 +51,7 @@ export default function LoginPage() {
           <div className="flex flex-col gap-2">
             <h1 className="text-[26px] font-semibold tracking-tight md:text-[32px]">Sign in</h1>
             <p className="text-sm leading-normal text-muted md:text-[15px]">
-              Use your work email. HR creates accounts; there is no sign-up.
+              Use your work email.
             </p>
           </div>
 
@@ -119,9 +120,10 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <p className="text-center text-sm text-muted md:text-left">
-            Forgot your password? Ask HR to reset it.
-          </p>
+          <div className="flex flex-col gap-1 text-center text-sm text-muted md:text-left">
+            <p>HR creates accounts; there is no sign-up.</p>
+            <p>Forgot your password? Ask HR to reset it.</p>
+          </div>
         </div>
       </main>
     </div>
@@ -169,7 +171,7 @@ const POINTS = [
 /** Dark product panel: a full column from md up, a short header on phones. */
 function BrandPanel() {
   return (
-    <section className="flex flex-col gap-5 bg-panel px-6 pt-16 pb-8 text-panel-text md:justify-between md:gap-0 md:px-16 md:py-14">
+    <section className="flex flex-col gap-5 bg-panel px-6 pt-16 pb-8 text-panel-text md:justify-between md:gap-0 md:px-10 md:py-14 lg:px-16">
       <div className="flex items-center gap-3">
         <div className="flex size-8 items-center justify-center rounded-[9px] bg-accent md:size-9 md:rounded-[10px]">
           <svg
@@ -190,7 +192,7 @@ function BrandPanel() {
       </div>
 
       <div className="flex flex-col gap-10">
-        <p className="text-[26px] leading-[1.15] font-semibold tracking-tight md:text-[44px] md:leading-[1.1]">
+        <p className="text-[26px] leading-[1.15] font-semibold tracking-tight md:text-[36px] md:leading-[1.1] lg:text-[44px]">
           Ask the handbook.
           <br />
           Get the page it came from.
