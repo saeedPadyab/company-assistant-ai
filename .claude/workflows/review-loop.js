@@ -22,7 +22,8 @@ export const meta = {
 // A red verify.sh, or a QA run that returns nothing, stops the run with no review: no verdict is recorded, so the
 // push stays blocked. The reviewer first checks that HEAD is still the commit QA checked and records nothing if it
 // moved; a review of another commit stops the run as well. In code, `review-status.sh record PASS` needs
-// `--verified <the QA'd sha>` and refuses it unless that is HEAD, so a PASS note never lands on an unverified commit. The QA criteria never change the verdict and never start a fix round.
+// `--verified <the QA'd sha>` (a full SHA) and refuses it unless that is HEAD, so a PASS note only lands on the
+// commit this workflow passed as QA-verified. The QA criteria never change the verdict and never start a fix round.
 //
 // Rounds: QA and review of HEAD; while the verdict is FAIL and fix round <= MAX_FIX_ROUNDS, the fixer fixes the
 // Blockers and commits, then QA and the reviewer check only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix

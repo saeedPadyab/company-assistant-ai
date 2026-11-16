@@ -60,7 +60,9 @@ class ReviewStatusTest(unittest.TestCase):
         self.assertEqual(self.get(), "FAIL")
 
     def test_record_refuses_a_bad_verified_argument(self) -> None:
-        for extra in (["--verified"], ["--verifed", "HEAD"], ["--verified", "no-such-rev"]):
+        head = self.repo.git("rev-parse", "HEAD").strip()
+        for extra in (["--verified"], ["--verifed", head], ["--verified", "no-such-rev"], ["--verified", "HEAD"],
+                      ["--verified", "@"], ["--verified", head[:12]], ["--verified", "0" * 40]):
             with self.subTest(extra=extra):
                 self.assertNotEqual(self.run_script("record", "PASS", "summary", *extra).returncode, 0)
         self.assertEqual(self.get(), "NONE")

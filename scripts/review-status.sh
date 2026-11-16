@@ -45,6 +45,8 @@ cmd_record() {
   [ -n "$summary" ] || die "a one-line summary is required"
   if [ $# -gt 2 ]; then
     [ "$3" = "--verified" ] && [ $# -eq 4 ] || die "$usage"
+    # a full SHA only: a name such as HEAD or @ would always equal HEAD and defeat the check below
+    [[ "$4" =~ ^[0-9a-f]{40}$ ]] || die "--verified needs the full 40-character SHA QA reported, got: $4"
     verified="$(git rev-parse --verify --quiet "$4^{commit}")" || die "--verified: not a commit: $4"
   fi
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes: the verdict must be for a commit, so commit or stash first"
