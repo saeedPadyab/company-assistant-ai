@@ -19,6 +19,8 @@ class ReviewStatusTest(unittest.TestCase):
         self.repo.write("file.txt", "one\n")
         self.repo.git("add", "file.txt")
         self.repo.commit("add file")
+        # main is the first commit; the branch has "add file" and what each test adds
+        self.repo.git("update-ref", "refs/remotes/origin/main", "HEAD~1")
 
     def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([SCRIPT, *args], cwd=self.repo.path, text=True, capture_output=True,
@@ -96,7 +98,8 @@ class ReviewStatusTest(unittest.TestCase):
 
     def test_carry_refuses_code_and_tooling(self) -> None:
         for path in ("src/app.ts", ".claude/agents/reviewer.md", ".github/pull_request_template.md",
-                     ".githooks/notes.md", "CLAUDE.md", "apps/server/CLAUDE.md", "AGENTS.md", "notes.txt"):
+                     ".githooks/notes.md", "CLAUDE.md", "apps/server/CLAUDE.md", "AGENTS.md", "notes.txt",
+                     "apps/web/.claude/skills/x/SKILL.md", "CLAUDE.local.md", "apps/server/CLAUDE.local.md"):
             with self.subTest(path=path):
                 self.repo.git("notes", "--ref=ai-review", "remove", "--ignore-missing", "HEAD")
                 self.record("PASS")
@@ -115,6 +118,36 @@ class ReviewStatusTest(unittest.TestCase):
         p = self.carry()
         self.assertNotEqual(p.returncode, 0)
         self.assertIn("file.txt", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_code_added_and_removed_again(self) -> None:
+        self.record("PASS")
+        self.change("src/app.ts")
+        self.repo.git("rm", "-q", "src/app.ts")
+        self.repo.commit("remove it again")
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("src/app.ts", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_ignores_a_pass_on_main(self) -> None:
+        # a PASS note on a commit of origin/main is not a review of this branch
+        self.repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.record("PASS")
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no passed ancestor", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_needs_origin_main(self) -> None:
+        self.record("PASS")
+        self.change("docs/a.md")
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no origin/main", p.stderr)
         self.assertEqual(self.get(), "NONE")
 
     def test_carry_refuses_without_a_passed_ancestor(self) -> None:

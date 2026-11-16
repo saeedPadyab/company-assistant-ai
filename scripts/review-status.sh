@@ -48,30 +48,35 @@ cmd_record() {
 
 docs_only_path() {  # docs_only_path <path>: Markdown that no tool or agent reads as instructions or config
   case "$1" in
-    .claude/* | .github/* | .githooks/*) return 1 ;;
-    CLAUDE.md | */CLAUDE.md | AGENTS.md | */AGENTS.md) return 1 ;;
+    .claude/* | */.claude/* | .github/* | .githooks/*) return 1 ;;
+    CLAUDE.md | */CLAUDE.md | CLAUDE.local.md | */CLAUDE.local.md | AGENTS.md | */AGENTS.md) return 1 ;;
     *.md) return 0 ;;
     *) return 1 ;;
   esac
 }
 
 cmd_carry() {
-  local head base="" sha verdict path bad=() count
+  local head base="" sha verdict path bad=() count main_ref="origin/main"
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes: commit or stash first"
   head="$(git rev-parse HEAD)"
   [ "$(verdict_of "$head")" = NONE ] || die "HEAD already has a verdict: $(verdict_of "$head")"
+  git rev-parse --verify --quiet "$main_ref^{commit}" >/dev/null || die "no $main_ref to bound the branch; run git fetch"
+  # only this branch's own commits: a PASS note on a commit of main is not a review of this branch
   while read -r sha; do
     verdict="$(verdict_of "$sha")"
     case "$verdict" in
       PASS) base="$sha"; break ;;
       FAIL) die "the nearest reviewed commit ${sha:0:12} has FAIL; run the reviewer" ;;
     esac
-  done < <(git rev-list --first-parent --max-count=200 "$head^" 2>/dev/null)
+  done < <(git rev-list --first-parent "$head^" --not "$main_ref" 2>/dev/null)
   [ -n "$base" ] || die "no passed ancestor on this branch; run the reviewer"
   [ -z "$(git rev-list --min-parents=2 "$base..$head")" ] || die "a merge since ${base:0:12}: run the reviewer"
-  while IFS= read -r -d '' path; do
-    docs_only_path "$path" || bad+=("$path")
-  done < <(git diff --name-only --no-renames -z "$base" "$head")
+  # each commit on its own: code added by one commit and removed by a later one is still not docs-only
+  while read -r sha; do
+    while IFS= read -r -d '' path; do
+      docs_only_path "$path" || bad+=("${sha:0:7}:$path")
+    done < <(git diff-tree --no-commit-id --name-only --no-renames -r -z "$sha")
+  done < <(git rev-list "$base..$head")
   [ ${#bad[@]} -eq 0 ] || die "not docs-only since ${base:0:12} (${bad[*]}); run the reviewer"
   count="$(git rev-list --count "$base..$head")"
   git notes --ref="$NOTES_REF" add -f -m "VERDICT: PASS" \
