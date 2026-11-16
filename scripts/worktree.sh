@@ -2,7 +2,7 @@
 # One worktree per GitHub issue, each with its own database.
 #
 #   scripts/worktree.sh new <issue> <slug> [type]   branch <type>/<issue>-<slug> from origin/main (type: feat|fix|chore|docs)
-#                                                   in ../<repo folder>-wt/<issue>, then `setup`
+#                                                   in .claude/worktrees/<issue> of the main checkout, then `setup`
 #   scripts/worktree.sh setup                       inside a worktree: .env files, database assistant_<issue>, git hooks, install, migrate
 #   scripts/worktree.sh remove <issue> [--yes] [--force]
 #                                                   drop the database, remove the worktree, delete the branch if merged
@@ -11,6 +11,10 @@
 # Why a database per worktree: a migration on one branch must not break the tests of another.
 # All worktrees share the one Postgres container of the main checkout (docker-compose.yml there).
 # .env files are copied from the main checkout (never committed); DATABASE_URL is rewritten to the worktree's database.
+# Why .claude/worktrees/ (issue #34): it is where Claude Code keeps its own worktrees, so a session can switch into
+# one with EnterWorktree (`path`), which makes it the session's worktree: the Bash sandbox then lets it write the
+# worktree's git dir (commits) and treats the folder as the project. A worktree outside the project folder
+# (the old ../<repo>-wt/<issue>) left `git commit` and Docker refused. .gitignore keeps the folder out of git.
 set -euo pipefail
 
 die() { echo "worktree: $*" >&2; exit 1; }
@@ -18,7 +22,7 @@ step() { echo "==> $*"; }
 
 COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || die "not inside the company-assistant repository"
 MAIN="$(dirname "$COMMON_DIR")"
-WT_ROOT="$(dirname "$MAIN")/$(basename "$MAIN")-wt"
+WT_ROOT="$MAIN/.claude/worktrees"
 COMPOSE=(docker compose -f "$MAIN/docker-compose.yml")
 DB_USER="assistant"
 

@@ -45,5 +45,22 @@ class CopyEnvTest(unittest.TestCase):
         self.assertEqual(self.copy(""), "")
 
 
+class WorktreeRootTest(unittest.TestCase):
+    """Issue #34: worktrees go inside the main checkout, in .claude/worktrees/, which git ignores."""
+
+    def test_root_is_claude_worktrees_of_the_main_checkout(self) -> None:
+        repo = TempRepo(self)
+        p = subprocess.run(["bash", "-c", f'source "{SCRIPT}" && printf %s "$WT_ROOT|$MAIN"'],
+                           cwd=repo.path, text=True, capture_output=True, env=clean_env(), timeout=30)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        root, main = p.stdout.split("|")
+        self.assertEqual(root, os.path.join(main, ".claude", "worktrees"))
+
+    def test_gitignore_keeps_worktrees_out_of_git(self) -> None:
+        p = subprocess.run(["git", "check-ignore", "-q", ".claude/worktrees/34/apps/server/src/x.ts"],
+                           cwd=ROOT, env=clean_env(), timeout=30)
+        self.assertEqual(p.returncode, 0, ".claude/worktrees/ is not in .gitignore")
+
+
 if __name__ == "__main__":
     unittest.main()

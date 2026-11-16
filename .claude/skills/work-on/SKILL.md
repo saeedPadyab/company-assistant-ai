@@ -53,14 +53,16 @@ Ask with a dialog (`AskUserQuestion`): the question names `<type>/<KEY>-<slug>` 
 scripts/worktree.sh new <KEY> <slug> <type>
 ```
 
-It creates `../company-assistant-wt/<KEY>`, copies the `.env` files with their own database `assistant_<KEY>`, installs and migrates. If it stops at "Postgres is not running", the worktree itself already exists: start the database (`docker compose up -d`, on its own) and run `scripts/worktree.sh setup` in the worktree. A `cd <worktree> && scripts/worktree.sh setup` from the main checkout stays in the sandbox, where Docker is refused and the same message comes back; in the desktop app run `scripts/worktree.sh setup` in the user's Terminal panel instead (`mcp__terminal__run_in_terminal` with `cwd` the worktree), else ask the user to run it.
+It creates `.claude/worktrees/<KEY>` in the main checkout (git ignores the folder), copies the `.env` files with their own database `assistant_<KEY>`, installs and migrates. If it stops at "Postgres is not running", the worktree itself already exists: start the database (`docker compose up -d`, on its own), move into the worktree (step 5), then run `scripts/worktree.sh setup` there, on its own. Not `cd <worktree> && scripts/worktree.sh setup` from the main checkout: that call stays in the sandbox, where Docker is refused and the same message comes back.
 
 ## 5. Move this session into the worktree
 
 Only when this session is not in the worktree. Do not ask the user where to continue: they started this session for this issue, so this session moves.
 
-- **Claude desktop app:** move the session with the directory tool (`mcp__ccd_directory__change_directory` to the worktree's absolute path; load it with ToolSearch if it is deferred). Then run `git branch --show-current` there to check the branch is the issue's, and go on with step 6.
-- **No such tool, or the move is refused:** tell the user in one line to open a session with the folder `../company-assistant-wt/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
+- **Switch with `EnterWorktree`** and `path` set to the worktree's absolute path (`<main checkout>/.claude/worktrees/<KEY>`; load the tool with ToolSearch if it is deferred). This makes it the session's own worktree, so the sandbox lets `git commit` (and the `fixer`'s commits) write its git dir, and the worktree is the project folder for every later command. Then run `git branch --show-current` to check the branch is the issue's, and go on with step 6.
+- Not `mcp__ccd_directory__change_directory`: after that move the sandbox still refuses the worktree's `.git/worktrees/<KEY>` (`index.lock: Operation not permitted`, issue #34).
+- **No `EnterWorktree`, or it is refused:** tell the user in one line to open a session with the folder `.claude/worktrees/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
+- When the work is done, `scripts/worktree.sh remove <KEY>` removes it (`/ship` checkpoint 7); `ExitWorktree` never removes a worktree entered with `path`.
 
 Never edit files in the main checkout.
 
