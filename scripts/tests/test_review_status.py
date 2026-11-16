@@ -32,8 +32,40 @@ class ReviewStatusTest(unittest.TestCase):
         return p.stdout.strip()
 
     def record(self, verdict: str) -> None:
-        p = self.run_script("record", verdict, "summary")
+        extra = ["--verified", self.repo.git("rev-parse", "HEAD").strip()] if verdict == "PASS" else []
+        p = self.run_script("record", verdict, "summary", *extra)
         self.assertEqual(p.returncode, 0, p.stderr)
+
+    def test_pass_needs_the_verified_sha(self) -> None:
+        p = self.run_script("record", "PASS", "summary")
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("PASS needs --verified", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_pass_refused_when_head_is_not_the_verified_commit(self) -> None:
+        verified = self.repo.git("rev-parse", "HEAD").strip()
+        self.repo.commit("moved after QA")
+        p = self.run_script("record", "PASS", "summary", "--verified", verified)
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no PASS for an unverified commit", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_pass_note_names_the_verified_commit(self) -> None:
+        self.record("PASS")
+        head = self.repo.git("rev-parse", "HEAD").strip()
+        self.assertIn(f"verified: {head}", self.repo.git("notes", "--ref=ai-review", "show", "HEAD"))
+
+    def test_fail_needs_no_verified_sha(self) -> None:
+        self.record("FAIL")
+        self.assertEqual(self.get(), "FAIL")
+
+    def test_record_refuses_a_bad_verified_argument(self) -> None:
+        head = self.repo.git("rev-parse", "HEAD").strip()
+        for extra in (["--verified"], ["--verifed", head], ["--verified", "no-such-rev"], ["--verified", "HEAD"],
+                      ["--verified", "@"], ["--verified", head[:12]], ["--verified", "0" * 40]):
+            with self.subTest(extra=extra):
+                self.assertNotEqual(self.run_script("record", "PASS", "summary", *extra).returncode, 0)
+        self.assertEqual(self.get(), "NONE")
 
     def test_no_note_is_none(self) -> None:
         self.assertEqual(self.get(), "NONE")

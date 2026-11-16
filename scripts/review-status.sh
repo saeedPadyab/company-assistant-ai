@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # The reviewer's verdict, stored on the commit it reviewed.
 #
-#   scripts/review-status.sh record PASS|FAIL "<summary>"   reviewer only (guard.py enforces): note on HEAD
+#   scripts/review-status.sh record PASS|FAIL "<summary>" [--verified <sha>]
+#                                                           reviewer only (guard.py enforces): note on HEAD;
+#                                                           PASS needs the SHA verify.sh was green on, = HEAD
 #   scripts/review-status.sh get [rev]                      prints PASS, FAIL or NONE (default rev: HEAD)
 #   scripts/review-status.sh publish                        after push: HEAD's verdict as the `ai-review` commit status on GitHub
 #   scripts/review-status.sh carry                          PASS onto HEAD from the nearest passed ancestor, docs-only commits since
@@ -37,13 +39,28 @@ verdict_of() {  # verdict_of <rev>: PASS, FAIL or NONE (also NONE when the note 
 }
 
 cmd_record() {
-  local verdict="${1:-}" summary="${2:-}"
-  [[ "$verdict" =~ ^(PASS|FAIL)$ ]] || die "usage: record PASS|FAIL \"<summary>\""
+  local verdict="${1:-}" summary="${2:-}" verified="" head
+  local usage="usage: record PASS|FAIL \"<summary>\" [--verified <sha>] (PASS needs it)"
+  [[ "$verdict" =~ ^(PASS|FAIL)$ ]] || die "$usage"
   [ -n "$summary" ] || die "a one-line summary is required"
+  if [ $# -gt 2 ]; then
+    [ "$3" = "--verified" ] && [ $# -eq 4 ] || die "$usage"
+    # a full SHA only: a name such as HEAD or @ would always equal HEAD and defeat the check below
+    [[ "$4" =~ ^[0-9a-f]{40}$ ]] || die "--verified needs the full 40-character SHA QA reported, got: $4"
+    verified="$(git rev-parse --verify --quiet "$4^{commit}")" || die "--verified: not a commit: $4"
+  fi
   [ -z "$(git status --porcelain --untracked-files=no)" ] || die "uncommitted changes: the verdict must be for a commit, so commit or stash first"
-  git notes --ref="$NOTES_REF" add -f -m "VERDICT: $verdict" -m "$summary" \
-    -m "reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" -m "commit: $(git rev-parse HEAD)" HEAD
-  echo "recorded $verdict on $(git rev-parse --short HEAD)"
+  head="$(git rev-parse HEAD)"
+  # PASS only on the commit scripts/verify.sh was green on (issue #36): the qa-verifier checks a commit, the
+  # reviewer reviews HEAD, and HEAD may have moved in between
+  if [ "$verdict" = PASS ]; then
+    [ -n "$verified" ] || die "PASS needs --verified <sha>: the commit the qa-verifier reported verify.sh green on"
+    [ "$verified" = "$head" ] || die "HEAD is $head but verify.sh was green on $verified: no PASS for an unverified commit"
+  fi
+  local args=(-m "VERDICT: $verdict" -m "$summary" -m "reviewed: $(date -u +%Y-%m-%dT%H:%M:%SZ)" -m "commit: $head")
+  [ -z "$verified" ] || args+=(-m "verified: $verified")
+  git notes --ref="$NOTES_REF" add -f "${args[@]}" "$head"
+  echo "recorded $verdict on $(git rev-parse --short "$head")"
 }
 
 docs_only_path() {  # docs_only_path <path>: Markdown that no tool or agent reads as instructions or config
@@ -107,5 +124,5 @@ case "${1:-}" in
   get) verdict_of "${2:-HEAD}" ;;
   publish) cmd_publish ;;
   carry) cmd_carry ;;
-  *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

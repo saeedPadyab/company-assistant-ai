@@ -1,10 +1,10 @@
 export const meta = {
-  name: 'ship-branch',
-  description: 'Review a finished issue branch and fix its Blockers, at most two fix rounds; Should fix and Nit are returned, never fixed',
-  whenToUse: 'Step 3 of /ship: the branch is committed and scripts/verify.sh is green. args: {key, worktree, since?}',
+  name: 'review-loop',
+  description: 'Verify and review a finished issue branch and fix its Blockers, at most two fix rounds; Should fix and Nit are returned, never fixed',
+  whenToUse: 'Step 2 of /review-branch: the branch is committed. args: {key, worktree, since?}',
   phases: [
-    { title: 'Review', detail: 'reviewer on HEAD (whole branch, or follow-up since `since`), qa-verifier beside it' },
-    { title: 'Fix', detail: 'fixer on the Blockers, then a follow-up review and QA of its commits (max 2 rounds)' },
+    { title: 'Review', detail: 'qa-verifier runs verify.sh on HEAD; on green, the reviewer reviews it (whole branch, or follow-up since `since`)' },
+    { title: 'Fix', detail: 'fixer on the Blockers, then QA and a follow-up review of its commits (max 2 rounds)' },
   ],
 }
 
@@ -16,15 +16,19 @@ export const meta = {
 //   since: a commit of this branch that an earlier run reviewed with PASS. The first review then covers only
 //          since..HEAD (the one follow-up review after the user chose to fix Should fix or Nit items).
 //
-// Rounds: review HEAD; while the verdict is FAIL and fix round <= MAX_FIX_ROUNDS, the fixer fixes the Blockers
-// and commits, then the reviewer reviews only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix rounds with
-// Blockers left, or a round in which the fixer commits nothing, the run stops and hands the Blockers to the user.
-// Should fix and Nit never start a round: they are collected from every review and returned once.
+// Each round (issue #36): the qa-verifier first runs scripts/verify.sh on HEAD and maps the acceptance criteria
+// to tests; this is the one verify.sh run per reviewed commit. Only when it reports green on that commit does the
+// reviewer start, so the reviewer never spends a review on a red commit and the two never share the database.
+// A red verify.sh, or a QA run that returns nothing, stops the run with no review: no verdict is recorded, so the
+// push stays blocked. The reviewer first checks that HEAD is still the commit QA checked and records nothing if it
+// moved; a review of another commit stops the run as well. In code, `review-status.sh record PASS` needs
+// `--verified <the QA'd sha>` (a full SHA) and refuses it unless that is HEAD, so a PASS note only lands on the
+// commit this workflow passed as QA-verified. The QA criteria never change the verdict and never start a fix round.
 //
-// QA (issue #34): the qa-verifier runs beside every review (parallel(); neither of them commits, so both see the
-// same HEAD). It runs scripts/verify.sh and maps the acceptance criteria to tests. Advisory: it never changes the
-// verdict and never starts a fix round, and a QA error leaves qa null. A red verify.sh at the final HEAD makes
-// readyForPr false, since a change is done only when verify.sh passes.
+// Rounds: QA and review of HEAD; while the verdict is FAIL and fix round <= MAX_FIX_ROUNDS, the fixer fixes the
+// Blockers and commits, then QA and the reviewer check only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix
+// rounds with Blockers left, or a round in which the fixer commits nothing, the run stops and hands the Blockers to
+// the user. Should fix and Nit never start a round: they are collected from every review and returned once.
 
 const parseArgs = (raw) => {
   if (typeof raw !== 'string') {
@@ -33,18 +37,18 @@ const parseArgs = (raw) => {
   try {
     return JSON.parse(raw)
   } catch (e) {
-    throw new Error(`ship-branch args must be {key, worktree, since?}; got a string that is not JSON: ${e.message}`)
+    throw new Error(`review-loop args must be {key, worktree, since?}; got a string that is not JSON: ${e.message}`)
   }
 }
 const input = parseArgs(args)
 const key = String(input.key || '').replace(/^#/, '')
 if (!/^\d+$/.test(key) || typeof input.worktree !== 'string' || !input.worktree.startsWith('/')) {
-  throw new Error('ship-branch needs args {key: <issue number>, worktree: <absolute path>, since?: <sha>}')
+  throw new Error('review-loop needs args {key: <issue number>, worktree: <absolute path>, since?: <sha>}')
 }
 const worktree = input.worktree
 const since = input.since ? String(input.since) : null
 if (since && !/^[0-9a-f]{7,40}$/i.test(since)) {
-  throw new Error(`ship-branch: since must be a commit SHA, got "${since}"`)
+  throw new Error(`review-loop: since must be a commit SHA, got "${since}"`)
 }
 const MAX_FIX_ROUNDS = 2
 
@@ -121,8 +125,11 @@ const formatBlockers = (blockers) =>
   blockers.map((b, i) => `${i + 1}. ${b.location} — ${b.defect}\n   Scenario: ${b.scenario}`).join('\n')
 
 // fromSha: the commit an earlier review of this run (or the user's `since`) covered; earlier: its Blockers
-const review = (label, fromSha, earlier) => agent(
+const review = (label, fromSha, earlier, qaSha) => agent(
   `Review issue #${key} in worktree ${worktree}.\n` +
+  `The qa-verifier already ran scripts/verify.sh on ${qaSha}: green. Do not run it.\n` +
+  `First check that \`git rev-parse HEAD\` is ${qaSha}. If it is not, HEAD moved after the check: do not review and ` +
+  'do not record a verdict; return verdict FAIL, verdictRecorded false, your HEAD as sha and one Blocker that says so.\n' +
   (fromSha
     ? `Follow-up mode, previous reviewed SHA ${fromSha}: review only ${fromSha}..HEAD (your "Follow-up mode" section).\n` +
       (earlier.length
@@ -130,7 +137,8 @@ const review = (label, fromSha, earlier) => agent(
         : 'No earlier Blockers were given: the caller says an earlier review passed that commit. Check that it did ' +
           '(your "Follow-up mode" step 1) and fall back to full mode if it did not.\n')
     : 'Full review of the branch against origin/main.\n') +
-  'Record your verdict on HEAD as your procedure says, then return the structured result (markdown = your full report).',
+  `Record your verdict on HEAD as your procedure says (a PASS with --verified ${qaSha}), then return the structured ` +
+  'result (markdown = your full report).',
   { agentType: 'reviewer', schema: REVIEW_SCHEMA, phase: label === 'review' ? 'Review' : 'Fix', label },
 )
 
@@ -158,14 +166,26 @@ const qa = (label, fromSha) => attempt(`qa-verifier ${label}`, () => agent(
   { agentType: 'qa-verifier', schema: QA_SCHEMA, phase: label === 'review' ? 'Review' : 'Fix', label: `qa ${label}` },
 ))
 
-// A review and its QA side by side. attempt() never throws, so one failing cannot take the other down.
-const reviewWithQa = async (label, fromSha, earlier) => {
-  const [r, q] = await parallel([
-    () => attempt(label === 'review' ? 'reviewer' : `reviewer ${label}`, () => review(label, fromSha, earlier)),
-    () => qa(label, fromSha),
-  ])
-  if (q) log(`qa ${label}: verify.sh ${q.verify}, ${q.criteria.filter((c) => c.status === 'missing').length} criteria missing`)
-  return [r || null, q || null]
+// One round: QA first, the reviewer only on a green verify.sh. Returns { qa, review, stop }; stop says why there
+// is no review. attempt() never throws, so an agent error ends up in stop.
+const qaThenReview = async (label, fromSha, earlier) => {
+  const q = await qa(label, fromSha)
+  if (!q) {
+    return { qa: null, review: null, stop: `${label}: the qa-verifier returned no result; no review without a green verify.sh` }
+  }
+  log(`qa ${label}: verify.sh ${q.verify} at ${q.sha}, ${q.criteria.filter((c) => c.status === 'missing').length} criteria missing`)
+  if (q.verify !== 'green') {
+    return { qa: q, review: null, stop: `${label}: scripts/verify.sh is red at ${q.sha}: ${q.verifyDetail}; no review` }
+  }
+  const r = await attempt(label === 'review' ? 'reviewer' : `reviewer ${label}`, () => review(label, fromSha, earlier, q.sha))
+  if (!r) {
+    return { qa: q, review: null, stop: `${label}: the reviewer returned no result` }
+  }
+  if (r.sha !== q.sha) {
+    // A verdict on a commit that QA did not verify must not count, whatever the reviewer returned
+    return { qa: q, review: null, stop: `${label}: HEAD moved between QA (${q.sha}) and the review (${r.sha}); run /review-branch again` }
+  }
+  return { qa: q, review: r, stop: null }
 }
 
 // Should fix and Nit from every review of the run, each once
@@ -177,10 +197,28 @@ const collect = (r) => {
 }
 
 phase('Review')
-let [current, lastQa] = await reviewWithQa('review', since, [])
-if (!current) {
-  throw new Error('the reviewer returned no result: treat as FAIL (no verdict, no push)')
+const first = await qaThenReview('review', since, [])
+if (!first.review) {
+  // No review happened, so no verdict was recorded and the push stays blocked
+  log(`stop: ${first.stop}`)
+  return {
+    verdict: 'FAIL',
+    sha: first.qa ? first.qa.sha : 'unknown',
+    verdictRecorded: false,
+    readyForPr: false,
+    stopReason: first.stop,
+    scope: null,
+    blockers: [],
+    shouldFix: [],
+    nits: [],
+    fixRounds: 0,
+    rounds: [],
+    finalReview: null,
+    qa: first.qa,
+  }
 }
+let current = first.review
+let lastQa = first.qa
 log(`review: ${current.verdict}, scope: ${current.scope}`)
 collect(current)
 const rounds = [{ round: 0, kind: 'review', sha: current.sha, scope: current.scope, verdict: current.verdict, blockers: current.blockers.length }]
@@ -201,20 +239,20 @@ while (current.verdict === 'FAIL' && fixRound <= MAX_FIX_ROUNDS) {
     stopReason = `round ${fixRound}: the fixer committed nothing; the Blockers need the user`
     break
   }
-  const [next, nextQa] = await reviewWithQa(`follow-up r${fixRound}`, current.sha, current.blockers)
-  lastQa = nextQa
-  if (!next) {
-    stopReason = `the fix commit ${fixed.sha} has no review`
+  const next = await qaThenReview(`follow-up r${fixRound}`, current.sha, current.blockers)
+  lastQa = next.qa
+  if (!next.review) {
+    stopReason = `the fix commit ${fixed.sha} has no review: ${next.stop}`
     unreviewedHead = fixed.sha
     break
   }
-  if (next.sha !== fixed.sha) {
-    log(`follow-up review saw HEAD ${next.sha}, the fixer reported ${fixed.sha}`)
+  if (next.review.sha !== fixed.sha) {
+    log(`QA and the follow-up review saw HEAD ${next.review.sha}, the fixer reported ${fixed.sha}`)
   }
-  log(`follow-up r${fixRound}: ${next.verdict}, scope: ${next.scope}`)
-  collect(next)
-  rounds.push({ round: fixRound, kind: 'review', sha: next.sha, scope: next.scope, verdict: next.verdict, blockers: next.blockers.length })
-  current = next
+  current = next.review
+  log(`follow-up r${fixRound}: ${current.verdict}, scope: ${current.scope}`)
+  collect(current)
+  rounds.push({ round: fixRound, kind: 'review', sha: current.sha, scope: current.scope, verdict: current.verdict, blockers: current.blockers.length })
   fixRound++
 }
 if (!stopReason) {
@@ -222,15 +260,15 @@ if (!stopReason) {
     ? 'pass'
     : `still FAIL after ${MAX_FIX_ROUNDS} fix rounds; no third round: the Blockers go to the user`
 }
-// QA of the final HEAD only: a report from an earlier round says nothing about the fix commits after it
+// QA of the final HEAD only: a report from another commit says nothing about the one that was reviewed last
 const qaFinal = lastQa && !unreviewedHead && lastQa.sha === current.sha ? lastQa : null
-const verifyRed = Boolean(qaFinal && qaFinal.verify === 'red')
-if (stopReason === 'pass' && verifyRed) {
-  stopReason = `PASS, but scripts/verify.sh is red at ${current.sha}: ${qaFinal.verifyDetail}`
+const verifiedGreen = Boolean(qaFinal && qaFinal.verify === 'green')
+if (stopReason === 'pass' && !verifiedGreen) {
+  stopReason = `PASS, but no green verify.sh report for ${current.sha}`
 }
 log(`stop: ${stopReason}`)
 
-const readyForPr = current.verdict === 'PASS' && current.verdictRecorded && !unreviewedHead && !verifyRed
+const readyForPr = current.verdict === 'PASS' && current.verdictRecorded && !unreviewedHead && verifiedGreen
 return {
   verdict: unreviewedHead ? 'FAIL' : current.verdict,
   sha: unreviewedHead || current.sha,
@@ -244,5 +282,5 @@ return {
   fixRounds: rounds.filter((r) => r.kind === 'fix').length,
   rounds,
   finalReview: current.markdown,
-  qa: qaFinal,
+  qa: qaFinal ?? lastQa,
 }

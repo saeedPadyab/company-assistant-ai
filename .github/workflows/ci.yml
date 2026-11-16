@@ -96,7 +96,7 @@ jobs:
       - run: pnpm exec turbo run typecheck lint test --filter=server
 
   hooks:
-    # the team's tooling (guard, pre-push, Stop hook, review-status, ship workflow, settings):
+    # the team's tooling (guard, pre-push, Stop hook, review-status, review-loop workflow, settings):
     # no turbo package, so always run (seconds, no network or agents)
     runs-on: ubuntu-latest
     steps:
