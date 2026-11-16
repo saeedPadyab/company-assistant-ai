@@ -51,7 +51,7 @@ scripts/review-status.sh get
 
 ## 3. Decide what is left
 
-- No review happened (`finalReview` is null): verify was red, or QA failed. Show `stopReason` (and the failing part from `qa.verifyDetail`) and stop. The user decides whether you fix it now: fix, commit with the `<KEY>: ` prefix, then `/review-branch` again from step 1.
+- No review happened (`finalReview` is null): verify was red, QA failed, or HEAD moved between QA and the review. Show `stopReason` (and the failing part from `qa.verifyDetail`) and stop. The user decides whether you fix it now: fix, commit with the `<KEY>: ` prefix, then `/review-branch` again from step 1.
 - `verdict` is `FAIL` (Blockers left after two fix rounds, the fixer could not fix them, or a fix commit was not reviewed): show `stopReason` and the Blockers with their scenarios, and stop. The user decides; a new fix after that is a new `/review-branch` run.
 - `readyForPr` is true and `get` prints `PASS`: relay three to five lines (verdict, Blockers fixed, the QA outcome), never the reports. Show `shouldFix`, `nits` and the QA criteria marked `missing` once and ask, in one dialog, for each group: fix now or leave them. They never start a fix round by themselves. Fix now: fix, commit with the `<KEY>: ` prefix, then run the workflow once more with `since` set to the PASS `sha` (one follow-up review of the new commits); its own Should fix and Nit items are listed for the user, not fixed. Offer `/new-issue` for anything left that is worth doing later.
 - Anything else (the workflow errors, `readyForPr` is false, or `get` does not print `PASS`): treat it as FAIL, say so, and stop. A missing verdict never allows `/ship`.

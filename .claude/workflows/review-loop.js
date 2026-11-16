@@ -20,7 +20,8 @@ export const meta = {
 // to tests; this is the one verify.sh run per reviewed commit. Only when it reports green on that commit does the
 // reviewer start, so the reviewer never spends a review on a red commit and the two never share the database.
 // A red verify.sh, or a QA run that returns nothing, stops the run with no review: no verdict is recorded, so the
-// push stays blocked. The QA criteria never change the verdict and never start a fix round.
+// push stays blocked. The reviewer first checks that HEAD is still the commit QA checked and records nothing if it
+// moved; a review of another commit stops the run as well. The QA criteria never change the verdict and never start a fix round.
 //
 // Rounds: QA and review of HEAD; while the verdict is FAIL and fix round <= MAX_FIX_ROUNDS, the fixer fixes the
 // Blockers and commits, then QA and the reviewer check only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix
@@ -125,6 +126,8 @@ const formatBlockers = (blockers) =>
 const review = (label, fromSha, earlier, qaSha) => agent(
   `Review issue #${key} in worktree ${worktree}.\n` +
   `The qa-verifier already ran scripts/verify.sh on ${qaSha}: green. Do not run it.\n` +
+  `First check that \`git rev-parse HEAD\` is ${qaSha}. If it is not, HEAD moved after the check: do not review and ` +
+  'do not record a verdict; return verdict FAIL, verdictRecorded false, your HEAD as sha and one Blocker that says so.\n' +
   (fromSha
     ? `Follow-up mode, previous reviewed SHA ${fromSha}: review only ${fromSha}..HEAD (your "Follow-up mode" section).\n` +
       (earlier.length
@@ -176,7 +179,8 @@ const qaThenReview = async (label, fromSha, earlier) => {
     return { qa: q, review: null, stop: `${label}: the reviewer returned no result` }
   }
   if (r.sha !== q.sha) {
-    log(`${label}: the reviewer saw HEAD ${r.sha}, QA checked ${q.sha}`)
+    // A verdict on a commit that QA did not verify must not count, whatever the reviewer returned
+    return { qa: q, review: null, stop: `${label}: HEAD moved between QA (${q.sha}) and the review (${r.sha}); run /review-branch again` }
   }
   return { qa: q, review: r, stop: null }
 }

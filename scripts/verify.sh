@@ -7,7 +7,7 @@
 # Same commands as .github/workflows/ci.yml, through turbo, so local and CI agree:
 #   web:    typecheck, lint, build
 #   server: migrate this checkout's database, then typecheck, lint, test
-#   hooks:  scripts/test-tooling.sh: guard, Stop hook, review-status, ship workflow, settings
+#   hooks:  scripts/test-tooling.sh: guard, Stop hook, review-status, review-loop workflow, settings
 #           (always; seconds, no turbo package)
 # Exit 0 = green. Used by the Stop hook (.claude/hooks/verify_on_stop.py).
 set -euo pipefail

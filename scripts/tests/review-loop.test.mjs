@@ -159,6 +159,27 @@ test('a QA error stops the run before any review', async () => {
   assert.match(result.stopReason, /qa-verifier returned no result/)
 })
 
+test('a review of another commit than QA checked does not count', async () => {
+  const { result, calls } = await run([review('b1', 'PASS')], ARGS, [qaReport('a1')])
+  assert.match(calls[0].prompt, /First check that `git rev-parse HEAD` is a1/)
+  assert.equal(result.verdict, 'FAIL')
+  assert.equal(result.readyForPr, false)
+  assert.equal(result.finalReview, null)
+  assert.match(result.stopReason, /HEAD moved between QA \(a1\) and the review \(b1\)/)
+})
+
+test('a HEAD change after a fix leaves the fix commit unreviewed', async () => {
+  const { result } = await run(
+    [review('a1', 'FAIL', { blockers: [blocker(1)] }), fix('b1'), review('c1', 'PASS')],
+    ARGS,
+    [qaReport('a1'), qaReport('b1')],
+  )
+  assert.equal(result.verdict, 'FAIL')
+  assert.equal(result.sha, 'b1')
+  assert.equal(result.readyForPr, false)
+  assert.match(result.stopReason, /fix commit b1 has no review: .*HEAD moved/)
+})
+
 test('a red verify.sh after a fix leaves the fix commit unreviewed', async () => {
   const { result, order } = await run(
     [review('a1', 'FAIL', { blockers: [blocker(1)] }), fix('b1'), review('b1', 'PASS')],
@@ -184,13 +205,6 @@ test('QA runs in every round; the final report and its missing criteria are retu
   assert.equal(result.readyForPr, true)
   assert.equal(result.qa.sha, 'b1')
   assert.equal(result.qa.criteria[0].status, 'missing', 'missing criteria are returned, not fixed')
-})
-
-test('a QA report of another commit is not the final one', async () => {
-  const { result } = await run([review('a1', 'PASS')], ARGS, [qaReport('zz')])
-  assert.equal(result.verdict, 'PASS')
-  assert.equal(result.readyForPr, false)
-  assert.match(result.stopReason, /no green verify\.sh report for a1/)
 })
 
 test('bad args are refused before any agent runs', async () => {
