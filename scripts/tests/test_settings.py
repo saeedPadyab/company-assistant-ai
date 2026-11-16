@@ -36,11 +36,13 @@ class SettingsTest(unittest.TestCase):
 
     def test_sandbox_denies_writes_to_worktree_tooling_from_the_main_checkout(self) -> None:
         # Issue #34: worktrees live in .claude/worktrees/<KEY> inside the main checkout, so a session there could
-        # otherwise rewrite a worktree's guard, skills, settings or git hooks with Bash. Inside a worktree these
-        # paths do not exist (relative to that project), so its own tooling stays editable there.
+        # otherwise rewrite a worktree's guard, skills, settings or git hooks with Bash. Not checked yet: whether a
+        # session that entered a worktree with EnterWorktree resolves these against the main checkout, which
+        # would also refuse Bash writes to its own tooling there (Edit and Write are not affected).
         deny_write = self.settings["sandbox"].get("filesystem", {}).get("denyWrite", [])
         for path in (".claude/worktrees/*/.claude/hooks/", ".claude/worktrees/*/.claude/skills/",
-                     ".claude/worktrees/*/.claude/settings.json", ".claude/worktrees/*/.githooks/"):
+                     ".claude/worktrees/*/.claude/settings.json", ".claude/worktrees/*/.claude/settings.local.json",
+                     ".claude/worktrees/*/.githooks/"):
             with self.subTest(path=path):
                 self.assertIn(path, deny_write)
 

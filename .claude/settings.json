@@ -88,6 +88,7 @@
         ".claude/worktrees/*/.claude/hooks/",
         ".claude/worktrees/*/.claude/skills/",
         ".claude/worktrees/*/.claude/settings.json",
+        ".claude/worktrees/*/.claude/settings.local.json",
         ".claude/worktrees/*/.githooks/"
       ]
     },
