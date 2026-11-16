@@ -43,6 +43,24 @@ issue_of_branch() {  # feat/12-slug -> 12
   echo "${BASH_REMATCH[1]}"
 }
 
+# worktree_of_issue <issue>: the path of the worktree whose branch is <type>/<issue>-*, wherever git has it
+# registered (worktrees made before issue #34 live in ../<repo>-wt/<issue>); else $WT_ROOT/<issue>.
+worktree_of_issue() {
+  local issue="$1" line path="" found=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) path="${line#worktree }" ;;
+      "branch refs/heads/"*)
+        if [ "$path" != "$MAIN" ] && [[ "${line#branch refs/heads/}" =~ ^[a-z]+/${issue}- ]]; then
+          [ -z "$found" ] || die "more than one worktree for issue $issue: $found and $path"
+          found="$path"
+        fi
+        ;;
+    esac
+  done < <(git worktree list --porcelain)
+  echo "${found:-$WT_ROOT/$issue}"
+}
+
 # copy_env <src> <dest> <db>: copy a .env file, pointing DATABASE_URL at <db>
 copy_env() {
   local src="$1" dest="$2" db="$3"
@@ -149,7 +167,7 @@ cmd_remove() {
     esac
     shift
   done
-  path="$WT_ROOT/$issue"
+  path="$(worktree_of_issue "$issue")"
   db="$(db_name "$issue")"
   [ -d "$path" ] || die "no worktree at $path"
   branch="$(git -C "$path" branch --show-current)"
