@@ -21,7 +21,8 @@ export const meta = {
 // reviewer start, so the reviewer never spends a review on a red commit and the two never share the database.
 // A red verify.sh, or a QA run that returns nothing, stops the run with no review: no verdict is recorded, so the
 // push stays blocked. The reviewer first checks that HEAD is still the commit QA checked and records nothing if it
-// moved; a review of another commit stops the run as well. The QA criteria never change the verdict and never start a fix round.
+// moved; a review of another commit stops the run as well. In code, `review-status.sh record PASS` needs
+// `--verified <the QA'd sha>` and refuses it unless that is HEAD, so a PASS note never lands on an unverified commit. The QA criteria never change the verdict and never start a fix round.
 //
 // Rounds: QA and review of HEAD; while the verdict is FAIL and fix round <= MAX_FIX_ROUNDS, the fixer fixes the
 // Blockers and commits, then QA and the reviewer check only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix
@@ -135,7 +136,8 @@ const review = (label, fromSha, earlier, qaSha) => agent(
         : 'No earlier Blockers were given: the caller says an earlier review passed that commit. Check that it did ' +
           '(your "Follow-up mode" step 1) and fall back to full mode if it did not.\n')
     : 'Full review of the branch against origin/main.\n') +
-  'Record your verdict on HEAD as your procedure says, then return the structured result (markdown = your full report).',
+  `Record your verdict on HEAD as your procedure says (a PASS with --verified ${qaSha}), then return the structured ` +
+  'result (markdown = your full report).',
   { agentType: 'reviewer', schema: REVIEW_SCHEMA, phase: label === 'review' ? 'Review' : 'Fix', label },
 )
 
@@ -244,7 +246,7 @@ while (current.verdict === 'FAIL' && fixRound <= MAX_FIX_ROUNDS) {
     break
   }
   if (next.review.sha !== fixed.sha) {
-    log(`follow-up review saw HEAD ${next.review.sha}, the fixer reported ${fixed.sha}`)
+    log(`QA and the follow-up review saw HEAD ${next.review.sha}, the fixer reported ${fixed.sha}`)
   }
   current = next.review
   log(`follow-up r${fixRound}: ${current.verdict}, scope: ${current.scope}`)

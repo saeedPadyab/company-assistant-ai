@@ -70,10 +70,10 @@ Do not invent findings to look thorough. A small correct change may have no find
 Once you have decided, and before you write the report, record it on the commit you reviewed:
 
 ```bash
-cd <worktree> && scripts/review-status.sh record PASS "<one line, at most ~120 characters: what you checked, or the Blockers>"
+cd <worktree> && scripts/review-status.sh record PASS "<one line, at most ~120 characters: what you checked, or the Blockers>" --verified <sha>
 ```
 
-(`FAIL` instead of `PASS` when there is a Blocker.) The verdict is a git note on HEAD; `git push` is blocked unless the pushed commit has a PASS note, and only you (the `reviewer` agent) may record one. It needs no uncommitted changes to tracked files. If the command fails, do not work around it: say in the report that the verdict was not recorded.
+`<sha>` is the commit your prompt says `scripts/verify.sh` was green on. (`FAIL` instead of `PASS` when there is a Blocker; FAIL needs no `--verified`.) A PASS is refused when HEAD is not that commit: then HEAD moved after QA, and you report that, not a verdict. The verdict is a git note on HEAD; `git push` is blocked unless the pushed commit has a PASS note, and only you (the `reviewer` agent) may record one. It needs no uncommitted changes to tracked files. If the command fails, do not work around it: say in the report that the verdict was not recorded.
 
 ## Report
 

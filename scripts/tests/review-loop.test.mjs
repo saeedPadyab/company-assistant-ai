@@ -162,6 +162,7 @@ test('a QA error stops the run before any review', async () => {
 test('a review of another commit than QA checked does not count', async () => {
   const { result, calls } = await run([review('b1', 'PASS')], ARGS, [qaReport('a1')])
   assert.match(calls[0].prompt, /First check that `git rev-parse HEAD` is a1/)
+  assert.match(calls[0].prompt, /a PASS with --verified a1/)
   assert.equal(result.verdict, 'FAIL')
   assert.equal(result.readyForPr, false)
   assert.equal(result.finalReview, null)
