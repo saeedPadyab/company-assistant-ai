@@ -292,6 +292,7 @@ class WhoRecords(GuardTest):
     ]
     READS = [
         "scripts/review-status.sh get",
+        "scripts/review-status.sh carry",  # issue #34: the script checks docs-only in code, any session may run it
         "git notes --ref=ai-review show HEAD",
         "git notes --ref ai-review list",
         "git log --notes=ai-review -1",

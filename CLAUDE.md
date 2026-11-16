@@ -8,6 +8,17 @@
 - What the full product does, as one diagram: `docs/architecture.md`.
 - Feature designs: `docs/features.md`. Before working on a feature, read its section; the three patterns at the top apply to every feature.
 
+## Talking to the user
+The user runs several sessions at once and reads each in passing.
+- Short by default: a message is at most about 5 lines, the outcome and then what is needed from the user. No recap of steps, no pasted reports or diffs (link the file or PR) unless asked.
+- A question with a finite set of answers goes through `AskUserQuestion`: recommended option first, 2 to 4 options, related questions in one dialog. A draft (issue text, PR body, a reply) goes in a scratchpad file sent with `SendUserFile`, not in the question. Ask in prose only when the answer is truly open.
+- An unanswered dialog is not consent: end the turn with one line, `Waiting: <question>`, add `[input]` to the session title, and ask again on the user's next message.
+
+## Session title
+In the desktop app the title is the board: `#<KEY> <2-5 word subject> [Stage]`, plus at most one status tag (e.g. `#34 Session flow [PR][building]`). Set it with `mcp__ccd_session_mgmt__set_session_title` (`session_id: "self"`) at every move, unasked; key and subject stay.
+- Stage, always one: `[Plan]` (reading the issue, planning) · `[Dev]` (implementing and verifying, nothing pushed) · `[PR]` (PR open) · `[Merged]` · `[Done]` (worktree removed).
+- Status, optional, removed once no longer true: `[input]` (waiting for the user's answer) · `[failed]` (CI or verify red, not fixed) · `[conflict]` · `[changes]` (review comments to handle) · `[building]` (CI running). If several apply, the first in this order.
+
 ## Commands
 Run from the repo root.
 - Install: `pnpm install --frozen-lockfile`
@@ -61,12 +72,15 @@ Run from the repo root.
 
 ## Review
 - Before push and PR, with all work committed and `scripts/verify.sh` green: run the review through `/ship` (step 3, the `ship-branch` workflow), which runs the `reviewer` subagent with the issue number and the worktree path.
-- The reviewer records its verdict on the commit it reviewed (`scripts/review-status.sh`, git notes `refs/notes/ai-review`). Only the reviewer may record; the guard hook denies it elsewhere. Git's own pre-push hook (`.githooks/pre-push`, turned on by `scripts/worktree.sh setup`) rejects a push unless each pushed ref's commit has PASS, so any new commit needs a new review; never use `--no-verify` or git aliases, or change `core.hooksPath`. Threat model and limits: issues #3 and #9, the header of `.claude/hooks/guard.py` and the Bash sandbox section above; a commit message or PR body that mentions these words goes in a file (`-F`). After the push, `scripts/review-status.sh publish` sets the `ai-review` commit status, which `main` requires next to `ci-ok` (`publish` writes to GitHub, so the guard asks). The status comes from the same local note, so it makes the verdict visible, not independent.
+- The reviewer records its verdict on the commit it reviewed (`scripts/review-status.sh`, git notes `refs/notes/ai-review`). Only the reviewer may record; the guard hook denies it elsewhere. Git's own pre-push hook (`.githooks/pre-push`, turned on by `scripts/worktree.sh setup`) rejects a push unless each pushed ref's commit has PASS, so any new commit needs a new review (docs-only commits: `carry`, below); never use `--no-verify` or git aliases, or change `core.hooksPath`. Threat model and limits: issues #3 and #9, the header of `.claude/hooks/guard.py` and the Bash sandbox section above; a commit message or PR body that mentions these words goes in a file (`-F`). After the push, `scripts/review-status.sh publish` sets the `ai-review` commit status, which `main` requires next to `ci-ok` (`publish` writes to GitHub, so the guard asks). The status comes from the same local note, so it makes the verdict visible, not independent.
 - `/ship` step 3 runs the `ship-branch` workflow (`.claude/workflows/ship-branch.js`): the reviewer on HEAD, then on `VERDICT: FAIL` the `fixer` agent fixes the Blockers and the reviewer reviews only the new commits. At most two fix rounds, decided in code; Blockers left after that go to the user. Never start another round by hand. Never argue a Blocker away or edit the review. This caps cost, it is not a security lock (issue #7).
 - Should fix and Nit never start a round and are not fixed automatically: the workflow returns them once, and the user decides now (fix, then one follow-up review of the new commits) or in a follow-up issue.
+- The `qa-verifier` agent runs beside each review in the workflow: it runs `scripts/verify.sh` on that HEAD and maps each acceptance criterion to a test or a check. It is advisory and records nothing; a red `verify.sh` makes `readyForPr` false. While it runs, the reviewer does not run `verify.sh` (one database per worktree).
+- Commits after a PASS that change only Markdown docs (not `.claude/`, `.github/`, `.githooks/` or a `CLAUDE.md`, no merges) need no new review: `scripts/review-status.sh carry` writes PASS on HEAD, naming the commit it was carried from. It checks this in code and refuses anything else.
+- After the PR: `/ship` section 6 walks the checkpoints (CI watched by the desktop app with Auto-fix, the user's review, comments, merge, leftovers, worktree removal), each a dialog.
 - Put the verdict and any open Should fix items in the PR description.
 
 ## Pull requests
-- Open a PR only through `/ship`: committed work, `scripts/verify.sh` green, reviewer PASS, and the user's yes on the PR text.
+- Open a PR only through `/ship`; follow it after that through `/ship` section 6 (never poll CI with `gh pr checks --watch` or a loop): committed work, `scripts/verify.sh` green, reviewer PASS, and the user's yes on the PR text.
 - Title `<KEY>: <issue title>`, at most about 70 characters; body follows `.github/pull_request_template.md` (Closes, what changes, how tested, review, not tested); all labels and the milestone copied from the issue.
 - Claude never merges. After the user merges: sync `main`, then `scripts/worktree.sh remove <KEY>`.

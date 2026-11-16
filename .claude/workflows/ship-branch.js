@@ -3,8 +3,8 @@ export const meta = {
   description: 'Review a finished issue branch and fix its Blockers, at most two fix rounds; Should fix and Nit are returned, never fixed',
   whenToUse: 'Step 3 of /ship: the branch is committed and scripts/verify.sh is green. args: {key, worktree, since?}',
   phases: [
-    { title: 'Review', detail: 'reviewer on HEAD (whole branch, or follow-up since `since`)' },
-    { title: 'Fix', detail: 'fixer on the Blockers, then a follow-up review of its commits (max 2 rounds)' },
+    { title: 'Review', detail: 'reviewer on HEAD (whole branch, or follow-up since `since`), qa-verifier beside it' },
+    { title: 'Fix', detail: 'fixer on the Blockers, then a follow-up review and QA of its commits (max 2 rounds)' },
   ],
 }
 
@@ -20,6 +20,11 @@ export const meta = {
 // and commits, then the reviewer reviews only <previous reviewed sha>..HEAD. After MAX_FIX_ROUNDS fix rounds with
 // Blockers left, or a round in which the fixer commits nothing, the run stops and hands the Blockers to the user.
 // Should fix and Nit never start a round: they are collected from every review and returned once.
+//
+// QA (issue #34): the qa-verifier runs beside every review (parallel(); neither of them commits, so both see the
+// same HEAD). It runs scripts/verify.sh and maps the acceptance criteria to tests. Advisory: it never changes the
+// verdict and never starts a fix round, and a QA error leaves qa null. A red verify.sh at the final HEAD makes
+// readyForPr false, since a change is done only when verify.sh passes.
 
 const parseArgs = (raw) => {
   if (typeof raw !== 'string') {
@@ -88,6 +93,30 @@ const FIX_SCHEMA = {
   required: ['sha', 'fixed', 'notFixed', 'verify'],
 }
 
+const QA_SCHEMA = {
+  type: 'object',
+  properties: {
+    sha: { type: 'string', description: 'full SHA of the HEAD that was checked' },
+    verify: { type: 'string', enum: ['green', 'red'], description: 'scripts/verify.sh result at that SHA' },
+    verifyDetail: { type: 'string', description: 'red: the failing part; green: what it ran' },
+    criteria: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          criterion: { type: 'string' },
+          status: { type: 'string', enum: ['covered', 'manual', 'missing', 'unchanged'] },
+          evidence: { type: 'string' },
+        },
+        required: ['criterion', 'status', 'evidence'],
+      },
+    },
+    findings: { type: 'array', items: { type: 'string' } },
+    markdown: { type: 'string', description: 'the full QA report' },
+  },
+  required: ['sha', 'verify', 'verifyDetail', 'criteria', 'findings', 'markdown'],
+}
+
 const formatBlockers = (blockers) =>
   blockers.map((b, i) => `${i + 1}. ${b.location} — ${b.defect}\n   Scenario: ${b.scenario}`).join('\n')
 
@@ -122,6 +151,23 @@ const attempt = async (what, run) => {
   }
 }
 
+const qa = (label, fromSha) => attempt(`qa-verifier ${label}`, () => agent(
+  `Check the verification of issue #${key} in worktree ${worktree}.\n` +
+  (fromSha ? `A previous review covered ${fromSha}: mark criteria the commits after it do not touch as unchanged.\n` : '') +
+  'Follow your procedure (scripts/verify.sh once, then each acceptance criterion) and return the structured result.',
+  { agentType: 'qa-verifier', schema: QA_SCHEMA, phase: label === 'review' ? 'Review' : 'Fix', label: `qa ${label}` },
+))
+
+// A review and its QA side by side. attempt() never throws, so one failing cannot take the other down.
+const reviewWithQa = async (label, fromSha, earlier) => {
+  const [r, q] = await parallel([
+    () => attempt(label === 'review' ? 'reviewer' : `reviewer ${label}`, () => review(label, fromSha, earlier)),
+    () => qa(label, fromSha),
+  ])
+  if (q) log(`qa ${label}: verify.sh ${q.verify}, ${q.criteria.filter((c) => c.status === 'missing').length} criteria missing`)
+  return [r || null, q || null]
+}
+
 // Should fix and Nit from every review of the run, each once
 const shouldFix = []
 const nits = []
@@ -131,7 +177,7 @@ const collect = (r) => {
 }
 
 phase('Review')
-let current = await attempt('reviewer', () => review('review', since, []))
+let [current, lastQa] = await reviewWithQa('review', since, [])
 if (!current) {
   throw new Error('the reviewer returned no result: treat as FAIL (no verdict, no push)')
 }
@@ -155,7 +201,8 @@ while (current.verdict === 'FAIL' && fixRound <= MAX_FIX_ROUNDS) {
     stopReason = `round ${fixRound}: the fixer committed nothing; the Blockers need the user`
     break
   }
-  const next = await attempt(`reviewer r${fixRound}`, () => review(`follow-up r${fixRound}`, current.sha, current.blockers))
+  const [next, nextQa] = await reviewWithQa(`follow-up r${fixRound}`, current.sha, current.blockers)
+  lastQa = nextQa
   if (!next) {
     stopReason = `the fix commit ${fixed.sha} has no review`
     unreviewedHead = fixed.sha
@@ -175,9 +222,15 @@ if (!stopReason) {
     ? 'pass'
     : `still FAIL after ${MAX_FIX_ROUNDS} fix rounds; no third round: the Blockers go to the user`
 }
+// QA of the final HEAD only: a report from an earlier round says nothing about the fix commits after it
+const qaFinal = lastQa && !unreviewedHead && lastQa.sha === current.sha ? lastQa : null
+const verifyRed = Boolean(qaFinal && qaFinal.verify === 'red')
+if (stopReason === 'pass' && verifyRed) {
+  stopReason = `PASS, but scripts/verify.sh is red at ${current.sha}: ${qaFinal.verifyDetail}`
+}
 log(`stop: ${stopReason}`)
 
-const readyForPr = current.verdict === 'PASS' && current.verdictRecorded && !unreviewedHead
+const readyForPr = current.verdict === 'PASS' && current.verdictRecorded && !unreviewedHead && !verifyRed
 return {
   verdict: unreviewedHead ? 'FAIL' : current.verdict,
   sha: unreviewedHead || current.sha,
@@ -191,4 +244,5 @@ return {
   fixRounds: rounds.filter((r) => r.kind === 'fix').length,
   rounds,
   finalReview: current.markdown,
+  qa: qaFinal,
 }

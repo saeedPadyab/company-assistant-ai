@@ -25,21 +25,37 @@ const review = (sha, verdict, { blockers = [], shouldFix = [], nits = [] } = {})
 })
 const fix = (sha) => ({ agentType: 'fixer', result: { sha, fixed: ['fixed'], notFixed: [], verify: 'green' } })
 
-// Runs the workflow; each agent() call takes the next canned answer, which must be for the same agent type.
-// An agent() call with no canned answer left throws, as a real agent error would.
-async function run(answers, args = ARGS) {
+const qaReport = (sha, verify = 'green', { missing = 0 } = {}) => ({
+  agentType: 'qa-verifier',
+  result: {
+    sha, verify, verifyDetail: verify === 'red' ? 'server tests failed' : 'lint, typecheck, test',
+    criteria: Array.from({ length: missing }, (_, i) => ({ criterion: `c${i}`, status: 'missing', evidence: 'none' })),
+    findings: [], markdown: `qa ${sha}`,
+  },
+})
+
+// The real parallel(): a barrier that never rejects; a thunk that throws resolves to null.
+const parallel = (thunks) => Promise.all(thunks.map((t) => Promise.resolve().then(t).catch(() => null)))
+
+// Runs the workflow. reviewer/fixer calls take the next canned answer in `answers`, which must be for the same
+// agent type; qa-verifier calls take the next one in `qaAnswers`. A call with no canned answer left throws, as a
+// real agent error would (for QA: no report, the run goes on).
+async function run(answers, args = ARGS, qaAnswers = []) {
   const queue = [...answers]
+  const qaQueue = [...qaAnswers]
   const calls = []
   const agent = async (prompt, opts) => {
     calls.push({ type: opts.agentType, prompt })
-    const next = queue.shift()
+    const next = opts.agentType === 'qa-verifier' ? qaQueue.shift() : queue.shift()
     if (!next) throw new Error(`unexpected ${opts.agentType} call`)
     assert.equal(opts.agentType, next.agentType, `call ${calls.length}`)
     return structuredClone(next.result)
   }
-  const fn = new AsyncFunction('args', 'agent', 'phase', 'log', BODY)
-  const result = await fn(args, agent, () => {}, () => {})
-  return { result, calls, types: calls.map((c) => c.type), left: queue.length }
+  const fn = new AsyncFunction('args', 'agent', 'phase', 'log', 'parallel', BODY)
+  const result = await fn(args, agent, () => {}, () => {}, parallel)
+  const types = calls.map((c) => c.type).filter((t) => t !== 'qa-verifier')
+  const qaCalls = calls.filter((c) => c.type === 'qa-verifier')
+  return { result, calls: calls.filter((c) => c.type !== 'qa-verifier'), qaCalls, types, left: queue.length }
 }
 
 test('FAIL then PASS: one fix round, verdict PASS', async () => {
@@ -111,6 +127,39 @@ test('a fixer error stops the run with an unknown, unreviewed HEAD', async () =>
 
 test('a reviewer error fails the run', async () => {
   await assert.rejects(run([]), /treat as FAIL/)
+})
+
+test('QA runs beside every review and its final report is returned', async () => {
+  const { result, qaCalls } = await run(
+    [review('a1', 'FAIL', { blockers: [blocker(1)] }), fix('b1'), review('b1', 'PASS')],
+    ARGS,
+    [qaReport('a1', 'red'), qaReport('b1', 'green', { missing: 1 })],
+  )
+  assert.equal(qaCalls.length, 2, 'one QA per review')
+  assert.match(qaCalls[1].prompt, /previous review covered a1/)
+  assert.equal(result.readyForPr, true)
+  assert.equal(result.qa.sha, 'b1')
+  assert.equal(result.qa.criteria[0].status, 'missing', 'missing criteria are returned, not fixed')
+})
+
+test('a red verify.sh at the final HEAD keeps a PASS from being ready for the PR', async () => {
+  const { result, types } = await run([review('a1', 'PASS')], ARGS, [qaReport('a1', 'red')])
+  assert.deepEqual(types, ['reviewer'], 'QA never starts a fix round')
+  assert.equal(result.verdict, 'PASS', 'QA never changes the verdict')
+  assert.equal(result.readyForPr, false)
+  assert.match(result.stopReason, /verify\.sh is red at a1: server tests failed/)
+})
+
+test('a QA error leaves qa null and the review result as it is', async () => {
+  const { result } = await run([review('a1', 'PASS')])
+  assert.equal(result.qa, null)
+  assert.equal(result.readyForPr, true)
+})
+
+test('a QA report of another commit is not the final one', async () => {
+  const { result } = await run([review('a1', 'PASS')], ARGS, [qaReport('zz', 'red')])
+  assert.equal(result.qa, null)
+  assert.equal(result.readyForPr, true)
 })
 
 test('bad args are refused before any agent runs', async () => {
