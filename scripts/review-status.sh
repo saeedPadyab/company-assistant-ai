@@ -47,9 +47,12 @@ cmd_record() {
 }
 
 docs_only_path() {  # docs_only_path <path>: Markdown that no tool or agent reads as instructions or config
-  case "$1" in
+  # lowercased: on a case-insensitive filesystem (macOS) `.Claude/x.md` is checked out into `.claude/`
+  local p
+  p="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$p" in
     .claude/* | */.claude/* | .github/* | .githooks/*) return 1 ;;
-    CLAUDE.md | */CLAUDE.md | CLAUDE.local.md | */CLAUDE.local.md | AGENTS.md | */AGENTS.md) return 1 ;;
+    claude.md | */claude.md | claude.local.md | */claude.local.md | agents.md | */agents.md) return 1 ;;
     *.md) return 0 ;;
     *) return 1 ;;
   esac

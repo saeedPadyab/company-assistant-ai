@@ -26,6 +26,7 @@ Run `gh` as a Bash call of its own (`cd <path> && gh ...`, nothing chained). If 
    - `covered`: a test that checks it (`<file>:<test name>`). Read it: would it fail without the change? If it would not, it is not coverage.
    - `manual`: no test can reach it (a prompt, a doc, a UI look) and the branch or the issue states how it was checked.
    - `missing`: neither.
+   - `unchanged`: only with a previous reviewed SHA, for a criterion the commits after it do not touch.
    `scripts/verify.sh passes` is `covered` by step 3 when it was green.
 
 ## Report

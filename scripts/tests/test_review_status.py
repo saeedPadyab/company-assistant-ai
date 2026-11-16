@@ -120,6 +120,26 @@ class ReviewStatusTest(unittest.TestCase):
         self.assertIn("file.txt", p.stderr)
         self.assertEqual(self.get(), "NONE")
 
+    def test_carry_refuses_tooling_paths_in_any_case(self) -> None:
+        # macOS checks `.Claude/x.md` out into `.claude/` and `Claude.md` onto CLAUDE.md
+        for path in (".Claude/agents/x.md", "apps/web/.CLAUDE/skills/s/SKILL.md", "Claude.md", "docs/Agents.MD",
+                     ".GitHub/notes.md"):
+            with self.subTest(path=path):
+                self.repo.git("notes", "--ref=ai-review", "remove", "--ignore-missing", "HEAD")
+                self.record("PASS")
+                self.change(path)
+                p = self.carry()
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn(path, p.stderr)
+                self.assertEqual(self.get(), "NONE")
+
+    def test_carry_accepts_markdown_in_upper_case(self) -> None:
+        self.record("PASS")
+        self.change("docs/NOTES.MD")
+        p = self.carry()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.get(), "PASS")
+
     def test_carry_refuses_code_added_and_removed_again(self) -> None:
         self.record("PASS")
         self.change("src/app.ts")
