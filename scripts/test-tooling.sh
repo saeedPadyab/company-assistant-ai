@@ -6,7 +6,7 @@
 #   guard + pre-push:    .claude/hooks/test_guard.py
 #   Stop hook, review-status.sh, .claude/settings.json, bash -n on scripts/ and .githooks/:
 #                        scripts/tests/test_*.py
-#   ship-branch workflow: scripts/tests/*.test.mjs (node --test)
+#   review-loop workflow: scripts/tests/*.test.mjs (node --test)
 # Run by scripts/verify.sh and the CI `hooks` job. A new guard rule, hook or tooling script gets its test here.
 set -uo pipefail
 

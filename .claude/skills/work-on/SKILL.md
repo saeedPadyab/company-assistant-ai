@@ -62,7 +62,7 @@ Only when this session is not in the worktree. Do not ask the user where to cont
 - **Switch with `EnterWorktree`** and `path` set to the worktree's absolute path (`<main checkout>/.claude/worktrees/<KEY>`; load the tool with ToolSearch if it is deferred). This makes it the session's own worktree, so the sandbox lets `git commit` (and the `fixer`'s commits) write its git dir, and the worktree is the project folder for every later command. Then run `git branch --show-current` to check the branch is the issue's, and go on with step 6.
 - Not `mcp__ccd_directory__change_directory`: after that move the sandbox still refuses the worktree's `.git/worktrees/<KEY>` (`index.lock: Operation not permitted`, issue #34).
 - **No `EnterWorktree`, or it is refused:** tell the user in one line to open a session with the folder `.claude/worktrees/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
-- When the work is done, `scripts/worktree.sh remove <KEY>` removes it (`/ship` checkpoint 7); `ExitWorktree` never removes a worktree entered with `path`.
+- When the work is done, `scripts/worktree.sh remove <KEY>` removes it (`/follow-pr` checkpoint 7); `ExitWorktree` never removes a worktree entered with `path`.
 
 Never edit files in the main checkout.
 

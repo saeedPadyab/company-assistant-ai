@@ -1,6 +1,6 @@
 ---
 name: fixer
-description: Fixes the reviewer's Blockers on an issue branch, each with a test, runs scripts/verify.sh and commits. Run by the ship-branch workflow; never pushes, never records a verdict, never touches Should fix or Nit items. Give it the issue number, the worktree path and the Blockers.
+description: Fixes the reviewer's Blockers on an issue branch, each with a test, runs scripts/verify.sh and commits. Run by the review-loop workflow; never pushes, never records a verdict, never touches Should fix or Nit items. Give it the issue number, the worktree path and the Blockers.
 tools: Read, Edit, Write, Grep, Glob, Bash
 model: opus
 ---
