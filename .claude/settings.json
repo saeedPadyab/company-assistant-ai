@@ -84,7 +84,12 @@
         ".git/config",
         ".git/hooks/",
         ".git/refs/notes/",
-        ".git/packed-refs"
+        ".git/packed-refs",
+        ".claude/worktrees/*/.claude/hooks/",
+        ".claude/worktrees/*/.claude/skills/",
+        ".claude/worktrees/*/.claude/settings.json",
+        ".claude/worktrees/*/.claude/settings.local.json",
+        ".claude/worktrees/*/.githooks/"
       ]
     },
     "excludedCommands": [

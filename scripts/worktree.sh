@@ -2,7 +2,7 @@
 # One worktree per GitHub issue, each with its own database.
 #
 #   scripts/worktree.sh new <issue> <slug> [type]   branch <type>/<issue>-<slug> from origin/main (type: feat|fix|chore|docs)
-#                                                   in ../<repo folder>-wt/<issue>, then `setup`
+#                                                   in .claude/worktrees/<issue> of the main checkout, then `setup`
 #   scripts/worktree.sh setup                       inside a worktree: .env files, database assistant_<issue>, git hooks, install, migrate
 #   scripts/worktree.sh remove <issue> [--yes] [--force]
 #                                                   drop the database, remove the worktree, delete the branch if merged
@@ -11,6 +11,10 @@
 # Why a database per worktree: a migration on one branch must not break the tests of another.
 # All worktrees share the one Postgres container of the main checkout (docker-compose.yml there).
 # .env files are copied from the main checkout (never committed); DATABASE_URL is rewritten to the worktree's database.
+# Why .claude/worktrees/ (issue #34): it is where Claude Code keeps its own worktrees, so a session can switch into
+# one with EnterWorktree (`path`), which makes it the session's worktree: the Bash sandbox then lets it write the
+# worktree's git dir (commits) and treats the folder as the project. A worktree outside the project folder
+# (the old ../<repo>-wt/<issue>) left `git commit` and Docker refused. .gitignore keeps the folder out of git.
 set -euo pipefail
 
 die() { echo "worktree: $*" >&2; exit 1; }
@@ -18,7 +22,7 @@ step() { echo "==> $*"; }
 
 COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || die "not inside the company-assistant repository"
 MAIN="$(dirname "$COMMON_DIR")"
-WT_ROOT="$(dirname "$MAIN")/$(basename "$MAIN")-wt"
+WT_ROOT="$MAIN/.claude/worktrees"
 COMPOSE=(docker compose -f "$MAIN/docker-compose.yml")
 DB_USER="assistant"
 
@@ -37,6 +41,24 @@ issue_of_branch() {  # feat/12-slug -> 12
   branch="$(git branch --show-current)"
   [[ "$branch" =~ ^[a-z]+/([0-9]+)- ]] || die "branch '$branch' is not <type>/<issue>-<slug>"
   echo "${BASH_REMATCH[1]}"
+}
+
+# worktree_of_issue <issue>: the path of the worktree whose branch is <type>/<issue>-*, wherever git has it
+# registered (worktrees made before issue #34 live in ../<repo>-wt/<issue>); else $WT_ROOT/<issue>.
+worktree_of_issue() {
+  local issue="$1" line path="" found=""
+  while IFS= read -r line; do
+    case "$line" in
+      "worktree "*) path="${line#worktree }" ;;
+      "branch refs/heads/"*)
+        if [ "$path" != "$MAIN" ] && [[ "${line#branch refs/heads/}" =~ ^[a-z]+/${issue}- ]]; then
+          [ -z "$found" ] || die "more than one worktree for issue $issue: $found and $path"
+          found="$path"
+        fi
+        ;;
+    esac
+  done < <(git worktree list --porcelain)
+  echo "${found:-$WT_ROOT/$issue}"
 }
 
 # copy_env <src> <dest> <db>: copy a .env file, pointing DATABASE_URL at <db>
@@ -145,7 +167,7 @@ cmd_remove() {
     esac
     shift
   done
-  path="$WT_ROOT/$issue"
+  path="$(worktree_of_issue "$issue")"
   db="$(db_name "$issue")"
   [ -d "$path" ] || die "no worktree at $path"
   branch="$(git -C "$path" branch --show-current)"

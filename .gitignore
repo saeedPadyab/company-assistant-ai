@@ -10,4 +10,6 @@ coverage/
 *.log
 .DS_Store
 .claude/settings.local.json
+# one worktree per issue (scripts/worktree.sh, Claude Code's EnterWorktree)
+.claude/worktrees/
 __pycache__/

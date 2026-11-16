@@ -33,7 +33,9 @@ Write tools on those settings files are denied in .claude/settings.json), checks
 that git will run it, and gives an early, readable deny for a push without the reviewer's PASS
 note. These paths are matched as text anywhere in a writer's arguments, so a copy out of them
 (`cp .git/refs/notes/ai-review /tmp/x`) is denied too, on purpose; reading them (`cat`) is not.
-Only the `reviewer` subagent (hook input `agent_type`) may write the note.
+Only the `reviewer` subagent (hook input `agent_type`) may write the note. The one exception is
+`review-status.sh carry` (issue #34): any session may run it, because the script itself refuses unless
+every commit since a passed ancestor is docs-only.
 `review-status.sh publish` writes to GitHub, so it asks.
 
 Threat model (issue #3): in scope is Claude pushing or recording a verdict by mistake or as a

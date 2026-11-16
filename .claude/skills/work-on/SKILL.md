@@ -35,7 +35,7 @@ gh issue view <KEY> --json number,title,body,labels,milestone,state,comments
 
 Then read the matching section of `docs/features.md` if the issue names a feature.
 
-Name the session after the issue, so the session list shows what each one is about: `#<KEY> <issue title>` (shorten the title to about 50 characters), e.g. `#6 Split CI into web and server jobs`.
+Name the session after the issue, so the session list shows what each one is about: `#<KEY> <issue title> [Plan]` (shorten the title to about 50 characters), e.g. `#6 Split CI into web and server jobs [Plan]`. The tag in brackets is the stage; keep it current as the work moves (`CLAUDE.md`, "Session title").
 
 - Claude desktop app: call the session-title tool (`mcp__ccd_session_mgmt__set_session_title` with `session_id: "self"`; load it with ToolSearch if it is deferred).
 - No such tool (terminal): tell the user they can run `/rename #<KEY> <title>`.
@@ -45,7 +45,7 @@ Name the session after the issue, so the session list shows what each one is abo
 - type: `fix` for a bug, `docs` for docs only, `chore` for tooling or config, otherwise `feat` (labels help: `chore` label means chore).
 - slug: 2 to 4 lowercase words from the title, joined by `-` (e.g. `leave-request`).
 
-Show `<type>/<KEY>-<slug>` and a three-line summary of the issue, then wait for the user's yes or a correction.
+Ask with a dialog (`AskUserQuestion`): the question names `<type>/<KEY>-<slug>` and gives a three-line summary of the issue; options _Create it (Recommended)_ · _Other name_ (in "Other"). Skip the dialog when the user already said to go ahead with this issue in this conversation; then use the proposed name.
 
 ## 4. Create the worktree
 
@@ -53,19 +53,21 @@ Show `<type>/<KEY>-<slug>` and a three-line summary of the issue, then wait for 
 scripts/worktree.sh new <KEY> <slug> <type>
 ```
 
-It creates `../company-assistant-wt/<KEY>`, copies the `.env` files with their own database `assistant_<KEY>`, installs and migrates. If it stops at "Postgres is not running", tell the user to start Docker and run the `setup` line the script printed; the worktree itself already exists.
+It creates `.claude/worktrees/<KEY>` in the main checkout (git ignores the folder), copies the `.env` files with their own database `assistant_<KEY>`, installs and migrates. If it stops at "Postgres is not running", the worktree itself already exists: start the database (`docker compose up -d`, on its own), move into the worktree (step 5), then run `scripts/worktree.sh setup` there, on its own. Not `cd <worktree> && scripts/worktree.sh setup` from the main checkout: that call stays in the sandbox, where Docker is refused and the same message comes back.
 
 ## 5. Move this session into the worktree
 
 Only when this session is not in the worktree. Do not ask the user where to continue: they started this session for this issue, so this session moves.
 
-- **Claude desktop app:** move the session with the directory tool (`mcp__ccd_directory__change_directory` to the worktree's absolute path; load it with ToolSearch if it is deferred). Then run `git branch --show-current` there to check the branch is the issue's, and go on with step 6.
-- **No such tool, or the move is refused:** tell the user in one line to open a session with the folder `../company-assistant-wt/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
+- **Switch with `EnterWorktree`** and `path` set to the worktree's absolute path (`<main checkout>/.claude/worktrees/<KEY>`; load the tool with ToolSearch if it is deferred). This makes it the session's own worktree, so the sandbox lets `git commit` (and the `fixer`'s commits) write its git dir, and the worktree is the project folder for every later command. Then run `git branch --show-current` to check the branch is the issue's, and go on with step 6.
+- Not `mcp__ccd_directory__change_directory`: after that move the sandbox still refuses the worktree's `.git/worktrees/<KEY>` (`index.lock: Operation not permitted`, issue #34).
+- **No `EnterWorktree`, or it is refused:** tell the user in one line to open a session with the folder `.claude/worktrees/<KEY>` and say `/work-on <KEY>` there (it then only reads the issue, names the session and plans), and stop here.
+- When the work is done, `scripts/worktree.sh remove <KEY>` removes it (`/ship` checkpoint 7); `ExitWorktree` never removes a worktree entered with `path`.
 
 Never edit files in the main checkout.
 
 ## 6. Plan before the first edit
 
-Summarize: what the issue asks, the acceptance criteria, the files you expect to touch, and how you will test it. Wait for the user's go-ahead before editing.
+Summarize: what the issue asks, the acceptance criteria, the files you expect to touch, and how you will test it. Wait for the user's go-ahead before editing. On the go-ahead, move the title's stage to `[Dev]`.
 
 Commits start with `<KEY>: `; the PR body contains `Closes #<KEY>` (see the Workflow section of `CLAUDE.md`).

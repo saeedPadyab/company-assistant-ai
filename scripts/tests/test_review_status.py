@@ -19,6 +19,8 @@ class ReviewStatusTest(unittest.TestCase):
         self.repo.write("file.txt", "one\n")
         self.repo.git("add", "file.txt")
         self.repo.commit("add file")
+        # main is the first commit; the branch has "add file" and what each test adds
+        self.repo.git("update-ref", "refs/remotes/origin/main", "HEAD~1")
 
     def run_script(self, *args: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([SCRIPT, *args], cwd=self.repo.path, text=True, capture_output=True,
@@ -70,6 +72,144 @@ class ReviewStatusTest(unittest.TestCase):
 
     def test_unknown_rev_is_none(self) -> None:
         self.assertEqual(self.get("no-such-rev"), "NONE")
+
+    # carry (issue #34): PASS onto HEAD only over docs-only commits since a passed ancestor
+
+    def change(self, rel: str, text: str = "x\n") -> None:
+        self.repo.write(rel, text)
+        self.repo.git("add", "-A")
+        self.repo.commit(f"change {rel}")
+
+    def carry(self) -> subprocess.CompletedProcess[str]:
+        return self.run_script("carry")
+
+    def test_carry_over_docs_commits(self) -> None:
+        self.record("PASS")
+        passed = self.repo.head()
+        self.change("docs/notes.md")
+        self.change("README.md")
+        p = self.carry()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn(f"carried PASS from {passed[:12]}", p.stdout)
+        self.assertEqual(self.get(), "PASS")
+        note = self.repo.git("notes", "--ref=ai-review", "show", "HEAD")
+        self.assertIn(f"carried-from: {passed}", note)
+        self.assertIn("2 docs-only commit(s)", note)
+
+    def test_carry_refuses_code_and_tooling(self) -> None:
+        for path in ("src/app.ts", ".claude/agents/reviewer.md", ".github/pull_request_template.md",
+                     ".githooks/notes.md", "CLAUDE.md", "apps/server/CLAUDE.md", "AGENTS.md", "notes.txt",
+                     "apps/web/.claude/skills/x/SKILL.md", "CLAUDE.local.md", "apps/server/CLAUDE.local.md"):
+            with self.subTest(path=path):
+                self.repo.git("notes", "--ref=ai-review", "remove", "--ignore-missing", "HEAD")
+                self.record("PASS")
+                self.change(path)
+                p = self.carry()
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("not docs-only", p.stderr)
+                self.assertIn(path, p.stderr)
+                self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_code_among_docs_and_a_rename_to_markdown(self) -> None:
+        self.record("PASS")
+        self.change("docs/a.md")
+        self.repo.git("mv", "file.txt", "docs/file.md")
+        self.repo.commit("rename code to markdown")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("file.txt", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_tooling_paths_in_any_case(self) -> None:
+        # macOS checks `.Claude/x.md` out into `.claude/` and `Claude.md` onto CLAUDE.md
+        for path in (".Claude/agents/x.md", "apps/web/.CLAUDE/skills/s/SKILL.md", "Claude.md", "docs/Agents.MD",
+                     ".GitHub/notes.md"):
+            with self.subTest(path=path):
+                self.repo.git("notes", "--ref=ai-review", "remove", "--ignore-missing", "HEAD")
+                self.record("PASS")
+                self.change(path)
+                p = self.carry()
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn(path, p.stderr)
+                self.assertEqual(self.get(), "NONE")
+
+    def test_carry_accepts_markdown_in_upper_case(self) -> None:
+        self.record("PASS")
+        self.change("docs/NOTES.MD")
+        p = self.carry()
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertEqual(self.get(), "PASS")
+
+    def test_carry_refuses_code_added_and_removed_again(self) -> None:
+        self.record("PASS")
+        self.change("src/app.ts")
+        self.repo.git("rm", "-q", "src/app.ts")
+        self.repo.commit("remove it again")
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("src/app.ts", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_ignores_a_pass_on_main(self) -> None:
+        # a PASS note on a commit of origin/main is not a review of this branch
+        self.repo.git("update-ref", "refs/remotes/origin/main", "HEAD")
+        self.record("PASS")
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no passed ancestor", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_needs_origin_main(self) -> None:
+        self.record("PASS")
+        self.change("docs/a.md")
+        self.repo.git("update-ref", "-d", "refs/remotes/origin/main")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no origin/main", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_without_a_passed_ancestor(self) -> None:
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("no passed ancestor", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_when_the_nearest_verdict_is_fail(self) -> None:
+        self.record("PASS")
+        self.repo.commit("two")
+        self.record("FAIL")
+        self.change("docs/a.md")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("FAIL", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_a_merge(self) -> None:
+        self.record("PASS")
+        self.repo.git("switch", "-q", "-c", "side")
+        self.change("docs/side.md")
+        self.repo.git("switch", "-q", "-")
+        self.change("docs/main.md")
+        self.repo.git("merge", "-q", "--no-ff", "-m", "merge side", "side")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("merge", p.stderr)
+        self.assertEqual(self.get(), "NONE")
+
+    def test_carry_refuses_uncommitted_changes_and_a_reviewed_head(self) -> None:
+        self.record("PASS")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("already has a verdict", p.stderr)
+        self.change("docs/a.md")
+        self.repo.write("file.txt", "changed\n")
+        p = self.carry()
+        self.assertNotEqual(p.returncode, 0)
+        self.assertIn("uncommitted changes", p.stderr)
+        self.assertEqual(self.get(), "NONE")
 
 
 if __name__ == "__main__":
